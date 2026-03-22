@@ -1,12 +1,11 @@
 # ============================================================================
-# LTX-2.3 FP8 — RunPod Serverless Worker
+# LTX-2.3 FP8 — RunPod Pod (FastAPI)
 # ============================================================================
-# Base: CUDA 12.8 + Ubuntu 24.04 (Python 3.12 built-in)
-# Models are NOT baked into the image — they live on a RunPod Network Volume
-# and are downloaded on first cold start (~65 GB one-time).
+# Runs a persistent FastAPI server on port 8000.
+# Models live on a RunPod Network Volume (~65 GB, downloaded on first boot).
 # ============================================================================
 
-FROM nvidia/cuda:12.8.0-devel-ubuntu24.04
+FROM runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -15,36 +14,28 @@ ENV HF_HOME=/runpod-volume/huggingface
 
 # ---- System dependencies ---------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 python3-pip python3-venv python3-dev \
-        ffmpeg git git-lfs curl wget \
+        ffmpeg git-lfs \
     && git lfs install \
     && rm -rf /var/lib/apt/lists/*
-
-# Ensure "python" points to python3.12
-RUN ln -sf /usr/bin/python3 /usr/bin/python
-
-# ---- PyTorch (CUDA 12.8) — separate layer for Docker cache ----------------
-RUN pip install --no-cache-dir --break-system-packages \
-    torch~=2.7 torchaudio \
-    --index-url https://download.pytorch.org/whl/cu128
 
 # ---- Clone LTX-2 repository ------------------------------------------------
 RUN git clone --depth 1 https://github.com/Lightricks/LTX-2.git /app/LTX-2
 
 # ---- Install ltx-core and ltx-pipelines ------------------------------------
-RUN pip install --no-cache-dir --break-system-packages \
+RUN pip install --no-cache-dir \
     -e /app/LTX-2/packages/ltx-core \
     -e /app/LTX-2/packages/ltx-pipelines
 
 # ---- Install remaining Python dependencies ---------------------------------
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir --break-system-packages \
-    -r /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # ---- Copy application code --------------------------------------------------
 COPY src/ /app/src/
+RUN chmod +x /app/src/start.sh
 
 WORKDIR /app
+EXPOSE 8000
 
-# ---- Entrypoint -------------------------------------------------------------
-CMD ["python", "-u", "/app/src/handler.py"]
+# ---- Use CMD (not ENTRYPOINT) per RunPod requirements ----------------------
+CMD ["/app/src/start.sh"]
