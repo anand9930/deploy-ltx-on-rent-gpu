@@ -19,8 +19,12 @@ logging.basicConfig(
 logger = logging.getLogger("ltx_handler")
 
 # ---------------------------------------------------------------------------
-# Ensure the LTX-2 packages are importable
+# Ensure local src/ and LTX-2 packages are importable
 # ---------------------------------------------------------------------------
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
 LTX_REPO_PATH = "/app/LTX-2"
 for pkg in ("packages/ltx-core", "packages/ltx-pipelines"):
     path = os.path.join(LTX_REPO_PATH, pkg)

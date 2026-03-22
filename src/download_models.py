@@ -14,6 +14,11 @@ def ensure_models_downloaded(model_dir: str) -> None:
     """
     os.makedirs(model_dir, exist_ok=True)
     hf_token = os.getenv("HF_TOKEN")
+    if not hf_token:
+        raise RuntimeError(
+            "HF_TOKEN env var required. Gemma 3 model needs license acceptance at "
+            "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized"
+        )
 
     # 1. LTX-2.3 FP8 checkpoint (~29 GB)
     checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-dev-fp8.safetensors")

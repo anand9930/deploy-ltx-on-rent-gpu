@@ -5,11 +5,16 @@ from supabase import create_client
 
 logger = logging.getLogger(__name__)
 
+# Validate required env vars early with a clear error.
+_url = os.getenv("SUPABASE_URL")
+_key = os.getenv("SUPABASE_SERVICE_KEY")
+if not _url or not _key:
+    raise RuntimeError(
+        "SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables must be set"
+    )
+
 # Initialise the Supabase client once at module level.
-_supabase = create_client(
-    os.environ["SUPABASE_URL"],
-    os.environ["SUPABASE_SERVICE_KEY"],
-)
+_supabase = create_client(_url, _key)
 
 
 def upload_video(file_path: str, object_key: str) -> str:
@@ -30,7 +35,14 @@ def upload_video(file_path: str, object_key: str) -> str:
         path=object_key,
         expires_in=expiry,
     )
-    url = res["signedURL"]
+
+    # Handle different SDK response formats
+    if isinstance(res, str):
+        url = res
+    elif isinstance(res, dict):
+        url = res.get("signedURL") or res.get("signedUrl", "")
+    else:
+        url = str(res)
 
     logger.info("Generated signed URL (expires in %ds)", expiry)
     return url
