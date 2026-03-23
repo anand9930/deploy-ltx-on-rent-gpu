@@ -177,10 +177,11 @@ async def load_model():
 
 @app.get("/health")
 async def health():
+    gpu_available = torch.cuda.is_available()
     return {
         "status": "healthy" if pipeline is not None else "loading",
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none",
-        "vram_gb": round(torch.cuda.get_device_properties(0).total_mem / 1e9, 1) if torch.cuda.is_available() else 0,
+        "gpu": torch.cuda.get_device_name(0) if gpu_available else "none",
+        "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1) if gpu_available else 0,
     }
 
 
