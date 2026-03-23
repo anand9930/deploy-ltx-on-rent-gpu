@@ -185,11 +185,11 @@ async def health():
     }
 
 
-@app.post("/generate", response_model=GenerateResponse)
-@torch.inference_mode()
-async def generate(req: GenerateRequest):
+@app.post("/generate")
+def generate(req: GenerateRequest):
+    """Generate a video from a text prompt. Returns video URL or error."""
     if pipeline is None:
-        return ErrorResponse(error="Model still loading, try again shortly.")
+        return {"error": "Model still loading, try again shortly."}
 
     # Normalize resolution and frames
     width = _round_to(req.width, 64)
@@ -300,7 +300,7 @@ async def generate(req: GenerateRequest):
     except Exception as e:
         logger.exception("Job %s failed: %s", job_id, e)
         torch.cuda.empty_cache()
-        return ErrorResponse(error=str(e))
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":
