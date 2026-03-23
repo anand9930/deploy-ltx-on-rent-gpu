@@ -72,11 +72,21 @@ def ensure_models_downloaded(model_dir: str) -> None:
     )
     if not gemma_has_weights:
         logger.info("Downloading Gemma 3 12B text encoder (~26 GB) ...")
-        snapshot_download(
-            repo_id="google/gemma-3-12b-it-qat-q4_0-unquantized",
-            local_dir=gemma_dir,
-            token=hf_token,
-        )
+        try:
+            snapshot_download(
+                repo_id="google/gemma-3-12b-it-qat-q4_0-unquantized",
+                local_dir=gemma_dir,
+                token=hf_token,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to download Gemma 3: %s. "
+                "You may need to accept the license at "
+                "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized "
+                "and wait for approval.",
+                e,
+            )
+            raise
     else:
         logger.info("Gemma 3 text encoder already cached.")
 

@@ -125,7 +125,7 @@ async def load_model():
     logger.info("Initializing LTX-2.3 pipeline ...")
 
     from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline
-    from ltx_core.utils.media_io import encode_video as _encode_video
+    from ltx_pipelines.utils.media_io import encode_video as _encode_video
 
     encode_video = _encode_video
 
