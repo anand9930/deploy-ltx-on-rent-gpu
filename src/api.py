@@ -115,13 +115,12 @@ app = FastAPI(title="LTX-2.3 Video Generation", version="1.0.0")
 
 @app.on_event("startup")
 async def load_model():
-    """Load the LTX-2.3 pipeline once at server startup."""
+    """Load the LTX-2.3 pipeline once at server startup.
+
+    Note: Model downloads happen in start.sh BEFORE this server starts.
+    This only initializes the pipeline from already-downloaded files.
+    """
     global pipeline, encode_video, TilingConfig, get_video_chunks_number, MultiModalGuiderParams
-
-    from download_models import ensure_models_downloaded
-
-    logger.info("Ensuring models are available on network volume ...")
-    ensure_models_downloaded(MODEL_DIR)
 
     logger.info("Initializing LTX-2.3 pipeline ...")
 
