@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir \
 
 # ---- Install remaining Python dependencies ---------------------------------
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade -r /tmp/requirements.txt
 
 # ---- Copy application code --------------------------------------------------
 COPY src/ /app/src/
