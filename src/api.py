@@ -175,10 +175,18 @@ async def load_model():
     _original_encode_prompts = _ti2vid_module.encode_prompts
 
     def _encode_prompts_with_cleanup(*args, **kwargs):
+        if torch.cuda.is_available():
+            logger.info("VRAM before encode_prompts: %.2f GB allocated",
+                        torch.cuda.memory_allocated(0) / 1e9)
         result = _original_encode_prompts(*args, **kwargs)
+        if torch.cuda.is_available():
+            logger.info("VRAM after encode_prompts (before cleanup): %.2f GB allocated",
+                        torch.cuda.memory_allocated(0) / 1e9)
         gc.collect()
         torch.cuda.empty_cache()
-        logger.info("Text encoder VRAM freed after prompt encoding")
+        if torch.cuda.is_available():
+            logger.info("VRAM after cleanup: %.2f GB allocated, %.2f GB reserved",
+                        torch.cuda.memory_allocated(0) / 1e9, torch.cuda.memory_reserved(0) / 1e9)
         return result
 
     _ti2vid_module.encode_prompts = _encode_prompts_with_cleanup
