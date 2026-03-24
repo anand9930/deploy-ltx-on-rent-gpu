@@ -5,6 +5,7 @@ Pipeline loads once at startup; each POST /generate runs inference,
 uploads the MP4 to Supabase Storage, and returns a signed URL.
 """
 
+import gc
 import logging
 import os
 import sys
@@ -158,6 +159,24 @@ async def load_model():
         loras=[],
         quantization=quantization,
     )
+
+    # ---- Monkey-patch encode_prompts to free text encoder VRAM ---------------
+    # The pipeline's __call__ runs encode_prompts (loads Gemma 3 ~24GB to GPU)
+    # but doesn't clean up before loading the next model. This patch forces
+    # garbage collection + CUDA cache flush after encoding, freeing VRAM for
+    # the transformer and other components.
+    import ltx_pipelines.ti2vid_two_stages as _ti2vid_module
+    _original_encode_prompts = _ti2vid_module.encode_prompts
+
+    def _encode_prompts_with_cleanup(*args, **kwargs):
+        result = _original_encode_prompts(*args, **kwargs)
+        gc.collect()
+        torch.cuda.empty_cache()
+        logger.info("Text encoder VRAM freed after prompt encoding")
+        return result
+
+    _ti2vid_module.encode_prompts = _encode_prompts_with_cleanup
+    logger.info("Installed encode_prompts VRAM cleanup patch")
 
     try:
         from ltx_core.components.guiders import MultiModalGuiderParams as _MG
