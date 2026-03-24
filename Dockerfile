@@ -2,7 +2,7 @@
 # LTX-2.3 FP8 — RunPod Pod (FastAPI)
 # ============================================================================
 # Runs a persistent FastAPI server on port 8000.
-# Models live on a RunPod Network Volume (~65 GB, downloaded on first boot).
+# Models live on a RunPod Network Volume (~52 GB, downloaded on first boot).
 # ============================================================================
 
 FROM runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04

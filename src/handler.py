@@ -50,7 +50,7 @@ SPATIAL_UPSAMPLER_PATH = os.path.join(
 DISTILLED_LORA_PATH = os.path.join(
     MODEL_DIR, "ltx-2.3-22b-distilled-lora-384.safetensors"
 )
-GEMMA_ROOT = os.path.join(MODEL_DIR, "gemma-3-12b-it-qat-q4_0-unquantized")
+GEMMA_ROOT = os.path.join(MODEL_DIR, "gemma-3-12b-fp8")
 
 # ---------------------------------------------------------------------------
 # Download models (idempotent -- skips if already on volume)

@@ -10,7 +10,7 @@ def ensure_models_downloaded(model_dir: str) -> None:
     """Download all required LTX-2.3 models to *model_dir* if not already present.
 
     Downloads are idempotent -- existing files are skipped.
-    Total download size on first run: ~65 GB.
+    Total download size on first run: ~52 GB.
     """
     os.makedirs(model_dir, exist_ok=True)
     hf_token = os.getenv("HF_TOKEN")
@@ -63,31 +63,42 @@ def ensure_models_downloaded(model_dir: str) -> None:
     else:
         logger.info("Distilled LoRA already cached.")
 
-    # 4. Gemma 3 12B text encoder (~26 GB, full snapshot)
-    gemma_dir = os.path.join(model_dir, "gemma-3-12b-it-qat-q4_0-unquantized")
-    gemma_has_weights = os.path.isdir(gemma_dir) and any(
-        f.endswith(".safetensors")
-        for f in os.listdir(gemma_dir)
-        if os.path.isfile(os.path.join(gemma_dir, f))
-    )
-    if not gemma_has_weights:
-        logger.info("Downloading Gemma 3 12B text encoder (~26 GB) ...")
+    # 4. Gemma 3 12B FP8 text encoder (~13 GB weights + config/tokenizer)
+    gemma_dir = os.path.join(model_dir, "gemma-3-12b-fp8")
+    gemma_fp8_weight = os.path.join(gemma_dir, "model.safetensors")
+    if not os.path.exists(gemma_fp8_weight):
+        # Step 1: Config & tokenizer from Google (gated, needs HF_TOKEN)
+        logger.info("Downloading Gemma 3 config/tokenizer ...")
         try:
             snapshot_download(
                 repo_id="google/gemma-3-12b-it-qat-q4_0-unquantized",
                 local_dir=gemma_dir,
                 token=hf_token,
+                ignore_patterns=["*.safetensors", "*.gguf"],
             )
         except Exception as e:
             logger.error(
-                "Failed to download Gemma 3: %s. "
+                "Failed to download Gemma 3 config: %s. "
                 "You may need to accept the license at "
                 "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized "
                 "and wait for approval.",
                 e,
             )
             raise
+
+        # Step 2: FP8 weights from community repo (public, ~13 GB)
+        logger.info("Downloading Gemma 3 FP8 weights (~13 GB) ...")
+        hf_hub_download(
+            repo_id="GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn",
+            filename="gemma_3_12B_it_fp8_e4m3fn.safetensors",
+            local_dir=gemma_dir,
+        )
+        # Rename to match pipeline's expected pattern (model*.safetensors)
+        os.rename(
+            os.path.join(gemma_dir, "gemma_3_12B_it_fp8_e4m3fn.safetensors"),
+            gemma_fp8_weight,
+        )
     else:
-        logger.info("Gemma 3 text encoder already cached.")
+        logger.info("Gemma 3 FP8 text encoder already cached.")
 
     logger.info("All models verified / downloaded to %s", model_dir)
