@@ -166,11 +166,24 @@ async def load_model():
         logger.info("VRAM after pipeline init: %.2f GB allocated, %.2f GB reserved",
                      torch.cuda.memory_allocated(0) / 1e9, torch.cuda.memory_reserved(0) / 1e9)
 
+    # ---- Use StateDictRegistry for CPU-based weight caching ------------------
+    # With DummyRegistry (default), _target_device() returns GPU, so all models
+    # are built directly on GPU. With StateDictRegistry, _target_device() returns
+    # CPU — models are built on CPU, weights cached there, and only moved to GPU
+    # when a factory method is called. This prevents multiple models from
+    # coexisting on GPU simultaneously.
+    try:
+        from ltx_core.loader.registry import StateDictRegistry
+        registry = StateDictRegistry()
+        pipeline.stage_1_model_ledger.registry = registry
+        pipeline.stage_2_model_ledger.registry = registry
+        logger.info("Switched to StateDictRegistry (CPU weight caching)")
+    except ImportError:
+        logger.warning("StateDictRegistry not available, using default registry")
+
     # ---- Monkey-patch encode_prompts to free text encoder VRAM ---------------
-    # The pipeline's __call__ runs encode_prompts (loads Gemma 3 ~24GB to GPU)
-    # but doesn't clean up before loading the next model. This patch forces
-    # garbage collection + CUDA cache flush after encoding, freeing VRAM for
-    # the transformer and other components.
+    # After text encoding completes, force garbage collection and CUDA cache
+    # flush so the text encoder VRAM is freed before the next model loads.
     import ltx_pipelines.ti2vid_two_stages as _ti2vid_module
     _original_encode_prompts = _ti2vid_module.encode_prompts
 
