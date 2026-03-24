@@ -124,6 +124,8 @@ async def load_model():
     global pipeline, encode_video, TilingConfig, get_video_chunks_number, MultiModalGuiderParams
 
     logger.info("Initializing LTX-2.3 pipeline ...")
+    if torch.cuda.is_available():
+        logger.info("VRAM before pipeline init: %.2f GB allocated", torch.cuda.memory_allocated(0) / 1e9)
 
     from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline
     from ltx_pipelines.utils.media_io import encode_video as _encode_video
@@ -159,6 +161,10 @@ async def load_model():
         loras=[],
         quantization=quantization,
     )
+
+    if torch.cuda.is_available():
+        logger.info("VRAM after pipeline init: %.2f GB allocated, %.2f GB reserved",
+                     torch.cuda.memory_allocated(0) / 1e9, torch.cuda.memory_reserved(0) / 1e9)
 
     # ---- Monkey-patch encode_prompts to free text encoder VRAM ---------------
     # The pipeline's __call__ runs encode_prompts (loads Gemma 3 ~24GB to GPU)
@@ -197,11 +203,16 @@ async def load_model():
 @app.get("/health")
 async def health():
     gpu_available = torch.cuda.is_available()
-    return {
+    info = {
         "status": "healthy" if pipeline is not None else "loading",
         "gpu": torch.cuda.get_device_name(0) if gpu_available else "none",
-        "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1) if gpu_available else 0,
+        "vram_total_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1) if gpu_available else 0,
     }
+    if gpu_available:
+        info["vram_used_gb"] = round(torch.cuda.memory_allocated(0) / 1e9, 1)
+        info["vram_reserved_gb"] = round(torch.cuda.memory_reserved(0) / 1e9, 1)
+        info["vram_free_gb"] = round((torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved(0)) / 1e9, 1)
+    return info
 
 
 @app.post("/generate")
