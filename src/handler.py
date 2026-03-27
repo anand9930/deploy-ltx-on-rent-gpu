@@ -92,9 +92,11 @@ try:
     ]
 except ImportError:
     logger.warning(
-        "Could not import LoRA primitives -- falling back to tuple format."
+        "Could not import LoRA primitives -- falling back to namedtuple format."
     )
-    distilled_lora = [(DISTILLED_LORA_PATH, 0.8, None)]
+    from collections import namedtuple
+    _LoraConfig = namedtuple("LoraPathStrengthAndSDOps", ["path", "strength", "sd_ops"])
+    distilled_lora = [_LoraConfig(path=DISTILLED_LORA_PATH, strength=0.8, sd_ops=None)]
 
 pipeline = TI2VidTwoStagesPipeline(
     checkpoint_path=CHECKPOINT_PATH,

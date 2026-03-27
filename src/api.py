@@ -148,7 +148,9 @@ async def load_model():
             )
         ]
     except ImportError:
-        distilled_lora = [(DISTILLED_LORA_PATH, 0.8, None)]
+        from collections import namedtuple
+        _LoraConfig = namedtuple("LoraPathStrengthAndSDOps", ["path", "strength", "sd_ops"])
+        distilled_lora = [_LoraConfig(path=DISTILLED_LORA_PATH, strength=0.8, sd_ops=None)]
 
     pipeline = TI2VidTwoStagesPipeline(
         checkpoint_path=CHECKPOINT_PATH,
