@@ -45,7 +45,7 @@ from storage import upload_video
 VOLUME_PATH = os.getenv("VOLUME_MOUNT_PATH", "/runpod-volume")
 MODEL_DIR = os.path.join(VOLUME_PATH, "models")
 
-CHECKPOINT_PATH = os.path.join(MODEL_DIR, "ltx-2.3-22b-dev-fp8.safetensors")
+CHECKPOINT_PATH = os.path.join(MODEL_DIR, "ltx-2.3-22b-dev.safetensors")
 SPATIAL_UPSAMPLER_PATH = os.path.join(
     MODEL_DIR, "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 )
