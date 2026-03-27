@@ -186,6 +186,7 @@ async def health():
 
 
 @app.post("/generate")
+@torch.inference_mode()
 def generate(req: GenerateRequest):
     """Generate a video from a text prompt. Returns video URL or error."""
     if pipeline is None:
