@@ -190,14 +190,14 @@ def handler(job: dict) -> dict:
                 stg_scale=stg_scale,
                 rescale_scale=rescale_scale,
                 modality_scale=3.0,
-                stg_blocks=[29],
+                stg_blocks=[28],
             )
             audio_guider_params = MultiModalGuiderParams(
                 cfg_scale=7.0,
-                stg_scale=0.0,
-                rescale_scale=0.0,
-                modality_scale=0.0,
-                stg_blocks=[],
+                stg_scale=1.0,
+                rescale_scale=0.7,
+                modality_scale=3.0,
+                stg_blocks=[28],
             )
         except ImportError:
             video_guider_params = None
