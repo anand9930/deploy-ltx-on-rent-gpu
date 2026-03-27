@@ -135,22 +135,17 @@ async def load_model():
     except ImportError:
         quantization = "fp8-cast"
 
-    try:
-        from ltx_core.loader.primitives import (
-            LTXV_LORA_COMFY_RENAMING_MAP,
-            LoraPathStrengthAndSDOps,
+    from ltx_core.loader import (
+        LTXV_LORA_COMFY_RENAMING_MAP,
+        LoraPathStrengthAndSDOps,
+    )
+    distilled_lora = [
+        LoraPathStrengthAndSDOps(
+            path=DISTILLED_LORA_PATH,
+            strength=0.8,
+            sd_ops=LTXV_LORA_COMFY_RENAMING_MAP,
         )
-        distilled_lora = [
-            LoraPathStrengthAndSDOps(
-                path=DISTILLED_LORA_PATH,
-                strength=0.8,
-                sd_ops=LTXV_LORA_COMFY_RENAMING_MAP,
-            )
-        ]
-    except ImportError:
-        from collections import namedtuple
-        _LoraConfig = namedtuple("LoraPathStrengthAndSDOps", ["path", "strength", "sd_ops"])
-        distilled_lora = [_LoraConfig(path=DISTILLED_LORA_PATH, strength=0.8, sd_ops=None)]
+    ]
 
     pipeline = TI2VidTwoStagesPipeline(
         checkpoint_path=CHECKPOINT_PATH,

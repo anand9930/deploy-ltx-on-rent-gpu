@@ -64,7 +64,7 @@ ensure_models_downloaded(MODEL_DIR)
 logger.info("Initializing LTX-2.3 pipeline ...")
 
 from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline  # noqa: E402
-from ltx_core.utils.media_io import encode_video  # noqa: E402
+from ltx_pipelines.utils.media_io import encode_video  # noqa: E402
 
 try:
     from ltx_core.quantization import QuantizationPolicy
@@ -75,28 +75,19 @@ except ImportError:
     quantization = "fp8-cast"
 
 # Build distilled LoRA config.
-# The pipeline expects a list of (path, strength, sd_ops) tuples.
-# sd_ops handles key renaming for ComfyUI-trained LoRAs.
-try:
-    from ltx_core.loader.primitives import (
-        LTXV_LORA_COMFY_RENAMING_MAP,
-        LoraPathStrengthAndSDOps,
-    )
+# sd_ops handles key renaming (strips diffusion_model. prefix from LoRA keys).
+from ltx_core.loader import (
+    LTXV_LORA_COMFY_RENAMING_MAP,
+    LoraPathStrengthAndSDOps,
+)
 
-    distilled_lora = [
-        LoraPathStrengthAndSDOps(
-            path=DISTILLED_LORA_PATH,
-            strength=0.8,
-            sd_ops=LTXV_LORA_COMFY_RENAMING_MAP,
-        )
-    ]
-except ImportError:
-    logger.warning(
-        "Could not import LoRA primitives -- falling back to namedtuple format."
+distilled_lora = [
+    LoraPathStrengthAndSDOps(
+        path=DISTILLED_LORA_PATH,
+        strength=0.8,
+        sd_ops=LTXV_LORA_COMFY_RENAMING_MAP,
     )
-    from collections import namedtuple
-    _LoraConfig = namedtuple("LoraPathStrengthAndSDOps", ["path", "strength", "sd_ops"])
-    distilled_lora = [_LoraConfig(path=DISTILLED_LORA_PATH, strength=0.8, sd_ops=None)]
+]
 
 pipeline = TI2VidTwoStagesPipeline(
     checkpoint_path=CHECKPOINT_PATH,
