@@ -190,7 +190,7 @@ def handler(job: dict) -> dict:
                 stg_scale=stg_scale,
                 rescale_scale=rescale_scale,
                 modality_scale=3.0,
-                stg_blocks=[28],
+                stg_blocks=[29],
             )
             audio_guider_params = MultiModalGuiderParams(
                 cfg_scale=7.0,

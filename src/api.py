@@ -216,7 +216,7 @@ def generate(req: GenerateRequest):
                 stg_scale=req.stg_scale,
                 rescale_scale=req.rescale_scale,
                 modality_scale=3.0,
-                stg_blocks=[28],
+                stg_blocks=[29],
             )
             audio_guider_params = MultiModalGuiderParams(
                 cfg_scale=7.0,
