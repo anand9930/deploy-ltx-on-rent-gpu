@@ -5,6 +5,7 @@ Pipeline loads once at startup; each POST /generate runs inference,
 uploads the MP4 to Supabase Storage, and returns a signed URL.
 """
 
+import gc
 import logging
 import os
 import sys
@@ -123,6 +124,8 @@ async def load_model():
     global pipeline, encode_video, TilingConfig, get_video_chunks_number, MultiModalGuiderParams
 
     logger.info("Initializing LTX-2.3 pipeline ...")
+    if torch.cuda.is_available():
+        logger.info("VRAM before pipeline init: %.2f GB allocated", torch.cuda.memory_allocated(0) / 1e9)
 
     from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline
     from ltx_pipelines.utils.media_io import encode_video as _encode_video
@@ -156,6 +159,49 @@ async def load_model():
         quantization=quantization,
     )
 
+    if torch.cuda.is_available():
+        logger.info("VRAM after pipeline init: %.2f GB allocated, %.2f GB reserved",
+                     torch.cuda.memory_allocated(0) / 1e9, torch.cuda.memory_reserved(0) / 1e9)
+
+    # ---- Use StateDictRegistry for CPU-based weight caching ------------------
+    # With DummyRegistry (default), _target_device() returns GPU, so all models
+    # are built directly on GPU. With StateDictRegistry, _target_device() returns
+    # CPU — models are built on CPU, weights cached there, and only moved to GPU
+    # when a factory method is called. This prevents multiple models from
+    # coexisting on GPU simultaneously.
+    try:
+        from ltx_core.loader.registry import StateDictRegistry
+        registry = StateDictRegistry()
+        pipeline.stage_1_model_ledger.registry = registry
+        pipeline.stage_2_model_ledger.registry = registry
+        logger.info("Switched to StateDictRegistry (CPU weight caching)")
+    except ImportError:
+        logger.warning("StateDictRegistry not available, using default registry")
+
+    # ---- Monkey-patch encode_prompts to free text encoder VRAM ---------------
+    # After text encoding completes, force garbage collection and CUDA cache
+    # flush so the text encoder VRAM is freed before the next model loads.
+    import ltx_pipelines.ti2vid_two_stages as _ti2vid_module
+    _original_encode_prompts = _ti2vid_module.encode_prompts
+
+    def _encode_prompts_with_cleanup(*args, **kwargs):
+        if torch.cuda.is_available():
+            logger.info("VRAM before encode_prompts: %.2f GB allocated",
+                        torch.cuda.memory_allocated(0) / 1e9)
+        result = _original_encode_prompts(*args, **kwargs)
+        if torch.cuda.is_available():
+            logger.info("VRAM after encode_prompts (before cleanup): %.2f GB allocated",
+                        torch.cuda.memory_allocated(0) / 1e9)
+        gc.collect()
+        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            logger.info("VRAM after cleanup: %.2f GB allocated, %.2f GB reserved",
+                        torch.cuda.memory_allocated(0) / 1e9, torch.cuda.memory_reserved(0) / 1e9)
+        return result
+
+    _ti2vid_module.encode_prompts = _encode_prompts_with_cleanup
+    logger.info("Installed encode_prompts VRAM cleanup patch")
+
     try:
         from ltx_core.components.guiders import MultiModalGuiderParams as _MG
         MultiModalGuiderParams = _MG
@@ -175,11 +221,16 @@ async def load_model():
 @app.get("/health")
 async def health():
     gpu_available = torch.cuda.is_available()
-    return {
+    info = {
         "status": "healthy" if pipeline is not None else "loading",
         "gpu": torch.cuda.get_device_name(0) if gpu_available else "none",
-        "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1) if gpu_available else 0,
+        "vram_total_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1) if gpu_available else 0,
     }
+    if gpu_available:
+        info["vram_used_gb"] = round(torch.cuda.memory_allocated(0) / 1e9, 1)
+        info["vram_reserved_gb"] = round(torch.cuda.memory_reserved(0) / 1e9, 1)
+        info["vram_free_gb"] = round((torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved(0)) / 1e9, 1)
+    return info
 
 
 @app.post("/generate")

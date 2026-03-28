@@ -5,6 +5,7 @@ Each job runs inference, encodes the video to MP4, uploads to Supabase
 Storage, and returns a signed URL.
 """
 
+import gc
 import logging
 import os
 import sys
@@ -62,6 +63,8 @@ ensure_models_downloaded(MODEL_DIR)
 # Instantiate the pipeline (once per worker lifetime)
 # ---------------------------------------------------------------------------
 logger.info("Initializing LTX-2.3 pipeline ...")
+if torch.cuda.is_available():
+    logger.info("VRAM before pipeline init: %.2f GB allocated", torch.cuda.memory_allocated(0) / 1e9)
 
 from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline  # noqa: E402
 from ltx_pipelines.utils.media_io import encode_video  # noqa: E402
@@ -97,6 +100,44 @@ pipeline = TI2VidTwoStagesPipeline(
     loras=[],
     quantization=quantization,
 )
+
+if torch.cuda.is_available():
+    logger.info("VRAM after pipeline init: %.2f GB allocated, %.2f GB reserved",
+                 torch.cuda.memory_allocated(0) / 1e9, torch.cuda.memory_reserved(0) / 1e9)
+
+# ---- Use StateDictRegistry for CPU-based weight caching ------------------
+try:
+    from ltx_core.loader.registry import StateDictRegistry
+    registry = StateDictRegistry()
+    pipeline.stage_1_model_ledger.registry = registry
+    pipeline.stage_2_model_ledger.registry = registry
+    logger.info("Switched to StateDictRegistry (CPU weight caching)")
+except ImportError:
+    logger.warning("StateDictRegistry not available, using default registry")
+
+# ---- Monkey-patch encode_prompts to free text encoder VRAM ---------------
+import ltx_pipelines.ti2vid_two_stages as _ti2vid_module  # noqa: E402
+_original_encode_prompts = _ti2vid_module.encode_prompts
+
+
+def _encode_prompts_with_cleanup(*args, **kwargs):
+    if torch.cuda.is_available():
+        logger.info("VRAM before encode_prompts: %.2f GB allocated",
+                    torch.cuda.memory_allocated(0) / 1e9)
+    result = _original_encode_prompts(*args, **kwargs)
+    if torch.cuda.is_available():
+        logger.info("VRAM after encode_prompts (before cleanup): %.2f GB allocated",
+                    torch.cuda.memory_allocated(0) / 1e9)
+    gc.collect()
+    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        logger.info("VRAM after cleanup: %.2f GB allocated, %.2f GB reserved",
+                    torch.cuda.memory_allocated(0) / 1e9, torch.cuda.memory_reserved(0) / 1e9)
+    return result
+
+
+_ti2vid_module.encode_prompts = _encode_prompts_with_cleanup
+logger.info("Installed encode_prompts VRAM cleanup patch")
 
 logger.info("Pipeline ready.")
 
