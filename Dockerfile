@@ -5,7 +5,7 @@
 # as a volume.  Downloaded on first boot if not already present (~64 GB).
 # ============================================================================
 
-FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -32,8 +32,10 @@ RUN uv pip install --system --no-cache /app
 # ---- Copy application code -------------------------------------------------
 COPY src/ /app/src/
 COPY service.py /app/service.py
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
 WORKDIR /app
 EXPOSE 8000
 
-CMD ["bentoml", "serve", "service:LTXVideoService", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/start.sh"]
