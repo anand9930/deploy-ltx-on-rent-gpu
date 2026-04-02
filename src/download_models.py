@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 def ensure_models_downloaded(model_dir: str) -> None:
     """Download all required LTX-2.3 models to *model_dir* if not already present.
 
+    Uses the official FP8 checkpoint (~29 GB) for lower VRAM usage.
     Downloads are idempotent -- existing files are skipped.
-    Total download size on first run: ~65 GB.
     """
     os.makedirs(model_dir, exist_ok=True)
     hf_token = os.getenv("HF_TOKEN")
@@ -20,18 +20,18 @@ def ensure_models_downloaded(model_dir: str) -> None:
             "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized"
         )
 
-    # 1. LTX-2.3 checkpoint (~58 GB, non-FP8 so LoRA fusion works correctly)
-    checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-dev.safetensors")
+    # 1. LTX-2.3 FP8 checkpoint (~29 GB, pre-quantized — no runtime FP8 cast needed)
+    checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-dev-fp8.safetensors")
     if not os.path.exists(checkpoint_path):
-        logger.info("Downloading LTX-2.3 checkpoint (~58 GB) ...")
+        logger.info("Downloading LTX-2.3 FP8 checkpoint (~29 GB) ...")
         hf_hub_download(
-            repo_id="Lightricks/LTX-2.3",
-            filename="ltx-2.3-22b-dev.safetensors",
+            repo_id="Lightricks/LTX-2.3-fp8",
+            filename="ltx-2.3-22b-dev-fp8.safetensors",
             local_dir=model_dir,
             token=hf_token,
         )
     else:
-        logger.info("LTX-2.3 checkpoint already cached.")
+        logger.info("LTX-2.3 FP8 checkpoint already cached.")
 
     # 2. Spatial upscaler 2x (~1 GB)
     upscaler_path = os.path.join(
@@ -48,7 +48,7 @@ def ensure_models_downloaded(model_dir: str) -> None:
     else:
         logger.info("Spatial upscaler already cached.")
 
-    # 3. Distilled LoRA (~7.6 GB)
+    # 3. Distilled LoRA (~7.6 GB, compatible with FP8 checkpoint)
     lora_path = os.path.join(
         model_dir, "ltx-2.3-22b-distilled-lora-384.safetensors"
     )
@@ -91,3 +91,11 @@ def ensure_models_downloaded(model_dir: str) -> None:
         logger.info("Gemma 3 text encoder already cached.")
 
     logger.info("All models verified / downloaded to %s", model_dir)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    ensure_models_downloaded(os.getenv("MODEL_DIR", "/models"))

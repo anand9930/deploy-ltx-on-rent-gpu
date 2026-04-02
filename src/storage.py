@@ -1,37 +1,55 @@
-import os
-import logging
+"""Supabase Storage integration for video uploads.
 
-from supabase import create_client
+The client is lazily initialised on the first call to :func:`upload_video`
+so that the rest of the application can start without Supabase credentials
+(useful for local development with BentoML).
+"""
+
+import logging
+import os
 
 logger = logging.getLogger(__name__)
 
-# Validate required env vars early with a clear error.
-_url = os.getenv("SUPABASE_URL")
-_key = os.getenv("SUPABASE_SERVICE_KEY")
-if not _url or not _key:
-    raise RuntimeError(
-        "SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables must be set"
-    )
+_supabase = None
 
-# Initialise the Supabase client once at module level.
-_supabase = create_client(_url, _key)
+
+def is_configured() -> bool:
+    """Return True when the required Supabase env vars are present."""
+    return bool(os.getenv("SUPABASE_URL")) and bool(os.getenv("SUPABASE_SERVICE_KEY"))
+
+
+def _get_client():
+    """Return the Supabase client, creating it on first call."""
+    global _supabase
+    if _supabase is None:
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_SERVICE_KEY")
+        if not url or not key:
+            raise RuntimeError(
+                "SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables must be set"
+            )
+        from supabase import create_client
+
+        _supabase = create_client(url, key)
+    return _supabase
 
 
 def upload_video(file_path: str, object_key: str) -> str:
     """Upload an MP4 file to Supabase Storage and return a signed URL."""
+    client = _get_client()
     bucket = os.getenv("SUPABASE_BUCKET", "ltx-videos")
 
     logger.info("Uploading %s to supabase://%s/%s", file_path, bucket, object_key)
 
     with open(file_path, "rb") as f:
-        _supabase.storage.from_(bucket).upload(
+        client.storage.from_(bucket).upload(
             path=object_key,
             file=f,
             file_options={"content-type": "video/mp4"},
         )
 
     expiry = int(os.getenv("SUPABASE_URL_EXPIRY_SECONDS", "604800"))
-    res = _supabase.storage.from_(bucket).create_signed_url(
+    res = client.storage.from_(bucket).create_signed_url(
         path=object_key,
         expires_in=expiry,
     )
