@@ -16,7 +16,6 @@ import bentoml
 from pydantic import Field
 
 from src import storage
-from src.download_models import ensure_models_downloaded
 from src.pipeline import DEFAULT_NEGATIVE_PROMPT, LTXVideoGenerator
 
 logger = logging.getLogger(__name__)
@@ -32,7 +31,6 @@ class LTXVideoService:
 
     def __init__(self) -> None:
         model_dir = os.getenv("MODEL_DIR", "/models")
-        ensure_models_downloaded(model_dir)
         self.generator = LTXVideoGenerator(model_dir=model_dir)
 
     @bentoml.task

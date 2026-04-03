@@ -35,69 +35,31 @@ src/download_models.py  Idempotent model downloader from HuggingFace
    docker build -t ltx-video .
    ```
 
-## Deploy on Vast.ai
+## Deploy
 
-### 1. Install the CLI and set your API key
+### Vast.ai (cheapest)
 
 ```bash
 pip install vastai
-vastai set api-key YOUR_VASTAI_API_KEY
+vastai set api-key YOUR_KEY
+export HF_TOKEN=hf_YOUR_TOKEN
+./deploy/vast/deploy.sh
 ```
 
-Get your API key from https://cloud.vast.ai/cli/
+See [deploy/vast/README.md](deploy/vast/README.md) for full instructions, volume setup, and cost details.
 
-### 2. Search for an RTX 4090 instance
+### Any Docker host
 
 ```bash
-vastai search offers \
-  'gpu_name=RTX_4090 gpu_ram>=23 disk_space>=100 inet_down>=200 reliability>0.95' \
-  -o 'dph_total'
+docker run --gpus all -p 8000:8000 \
+  -e HF_TOKEN=hf_YOUR_TOKEN -e MODEL_DIR=/models \
+  -v /path/to/models:/models \
+  anand9930/ltx-video:latest
 ```
 
-This finds RTX 4090 machines with 100GB+ disk, fast internet (for model downloads), and high reliability — sorted by price. You'll see output like:
+### Test the API
 
-```
-ID       CUDA  Num  Model      VRAM   Storage  $/hr   DLP    DLP/$  Reliability
-12345    12.4  1x   RTX_4090   24 GB  200 GB   0.311  94.5   303.9  0.991
-23456    12.2  1x   RTX_4090   24 GB  150 GB   0.338  91.2   269.8  0.997
-```
-
-Pick the cheapest offer ID.
-
-### 3. Create the instance
-
-```bash
-vastai create instance OFFER_ID \
-  --image ghcr.io/<your-username>/deploy-ltx-on-rent-gpu:latest \
-  --env '-p 8000:8000 -e HF_TOKEN=hf_YOUR_TOKEN -e MODEL_DIR=/models' \
-  --disk 100 \
-  --onstart-cmd 'cd /app && bentoml serve service:LTXVideoService --host 0.0.0.0 --port 8000'
-```
-
-Replace:
-- `OFFER_ID` with the ID from step 2
-- `hf_YOUR_TOKEN` with your HuggingFace token
-
-The instance will:
-1. Pull the Docker image (~5 GB)
-2. Download model files to `/models` (~64 GB, first boot only)
-3. Start the BentoML service on port 8000
-
-### 4. Find your public endpoint
-
-```bash
-vastai show instances
-```
-
-Note the instance ID, then check the IP and port mapping. The external port is randomized — look for the mapping to internal port 8000. Your endpoint will be:
-
-```
-http://<EXTERNAL_IP>:<MAPPED_PORT>
-```
-
-### 5. Wait for readiness and test
-
-The model takes 2-5 minutes to load after download. Check readiness:
+Check readiness:
 
 ```bash
 curl http://<EXTERNAL_IP>:<MAPPED_PORT>/readyz
@@ -135,26 +97,6 @@ curl -X POST http://<EXTERNAL_IP>:<MAPPED_PORT>/generate_sync \
   -H 'Content-Type: application/json' \
   -d '{"prompt": "A cat sitting on a windowsill", "width": 512, "height": 768, "num_frames": 25, "num_inference_steps": 8}' \
   --output video.mp4
-```
-
-### 6. Monitor and manage
-
-```bash
-# View logs
-vastai logs INSTANCE_ID
-
-# SSH into the instance
-vastai ssh-url INSTANCE_ID
-# Then: ssh -i ~/.ssh/id_ed25519 root@<ip> -p <port>
-
-# Stop (pauses GPU billing, keeps disk)
-vastai stop instance INSTANCE_ID
-
-# Resume
-vastai start instance INSTANCE_ID
-
-# Destroy (stops all billing)
-vastai destroy instance INSTANCE_ID
 ```
 
 ## API Reference
