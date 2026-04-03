@@ -3,7 +3,6 @@
 All VRAM optimisation techniques live here.
 """
 
-import gc
 import logging
 import os
 import tempfile
@@ -49,7 +48,25 @@ class LTXVideoGenerator:
 
         self._encode_video = encode_video
 
-        # Distilled LoRA (compatible with FP8 checkpoint)
+        # FP8 quantization — reduces VRAM by ~40%
+        quantization = None
+        try:
+            from ltx_core.quantization import QuantizationPolicy
+            quantization = QuantizationPolicy.fp8_cast()
+            logger.info("Using FP8 quantization")
+        except ImportError:
+            logger.warning("QuantizationPolicy not available, running without quantization")
+
+        # CPU weight caching — only one model on GPU at a time
+        registry = None
+        try:
+            from ltx_core.loader import StateDictRegistry
+            registry = StateDictRegistry()
+            logger.info("Using StateDictRegistry (CPU weight caching)")
+        except ImportError:
+            logger.warning("StateDictRegistry not available")
+
+        # Distilled LoRA
         from ltx_core.loader import (
             LTXV_LORA_COMFY_RENAMING_MAP,
             LoraPathStrengthAndSDOps,
@@ -62,42 +79,22 @@ class LTXVideoGenerator:
             )
         ]
 
-        self._pipeline = TI2VidTwoStagesPipeline(
+        # Build pipeline — pass registry and quantization at construction time
+        # so VRAM is managed correctly from the start
+        pipeline_kwargs = dict(
             checkpoint_path=checkpoint_path,
             distilled_lora=distilled_lora,
             spatial_upsampler_path=spatial_upsampler_path,
             gemma_root=gemma_root,
             loras=[],
         )
+        if quantization is not None:
+            pipeline_kwargs["quantization"] = quantization
+        if registry is not None:
+            pipeline_kwargs["registry"] = registry
+
+        self._pipeline = TI2VidTwoStagesPipeline(**pipeline_kwargs)
         self._log_vram("after pipeline init")
-
-        # CPU weight caching — prevents multiple models coexisting on GPU
-        try:
-            from ltx_core.loader.registry import StateDictRegistry
-            registry = StateDictRegistry()
-            self._pipeline.stage_1_model_ledger.registry = registry
-            self._pipeline.stage_2_model_ledger.registry = registry
-            logger.info("Switched to StateDictRegistry (CPU weight caching)")
-        except (ImportError, AttributeError):
-            logger.warning("StateDictRegistry not available or pipeline API changed, skipping")
-
-        # Monkey-patch encode_prompts to free text encoder VRAM after use
-        try:
-            import ltx_pipelines.ti2vid_two_stages as _mod
-            _orig = _mod.encode_prompts
-
-            def _encode_with_cleanup(*args, **kwargs):
-                self._log_vram("before encode_prompts")
-                result = _orig(*args, **kwargs)
-                self._log_vram("after encode_prompts")
-                gc.collect()
-                torch.cuda.empty_cache()
-                self._log_vram("after VRAM cleanup")
-                return result
-
-            _mod.encode_prompts = _encode_with_cleanup
-        except AttributeError:
-            logger.warning("encode_prompts not found in module, skipping VRAM cleanup patch")
 
         # Optional components (guiders, tiling)
         self._MultiModalGuiderParams = None
