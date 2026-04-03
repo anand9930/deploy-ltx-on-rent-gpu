@@ -48,9 +48,15 @@ class LTXVideoGenerator:
 
         self._encode_video = encode_video
 
-        # No runtime quantization needed — checkpoint is already FP8.
-        # Re-enable fp8_cast() here if switching to a BF16 checkpoint.
-        quantization = None
+        # FP8 quantization — required even for FP8 checkpoints to handle
+        # BFloat16 ↔ Float8_e4m3fn conversion during matrix multiplication
+        try:
+            from ltx_core.quantization import QuantizationPolicy
+            quantization = QuantizationPolicy.fp8_cast()
+            logger.info("Using FP8 quantization (fp8_cast)")
+        except ImportError:
+            quantization = None
+            logger.warning("QuantizationPolicy not available")
 
         # CPU weight caching — only one model on GPU at a time
         registry = None
