@@ -31,7 +31,7 @@ class LTXVideoGenerator:
     """Initialises the LTX-2.3 two-stage pipeline and runs inference."""
 
     def __init__(self, model_dir: str = "/models") -> None:
-        checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-dev-fp8.safetensors")
+        checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-dev.safetensors")
         spatial_upsampler_path = os.path.join(
             model_dir, "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
         )
@@ -48,8 +48,8 @@ class LTXVideoGenerator:
 
         self._encode_video = encode_video
 
-        # FP8 quantization — required even for FP8 checkpoints to handle
-        # BFloat16 ↔ Float8_e4m3fn conversion during matrix multiplication
+        # FP8 quantization — downcasts BF16 weights to FP8 on the fly,
+        # upcasts back to BF16 during forward. ~40% VRAM reduction.
         try:
             from ltx_core.quantization import QuantizationPolicy
             quantization = QuantizationPolicy.fp8_cast()

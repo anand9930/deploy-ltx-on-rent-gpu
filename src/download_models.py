@@ -20,18 +20,18 @@ def ensure_models_downloaded(model_dir: str) -> None:
             "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized"
         )
 
-    # 1. LTX-2.3 FP8 checkpoint (~29 GB, pre-quantized — no runtime FP8 cast needed)
-    checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-dev-fp8.safetensors")
+    # 1. LTX-2.3 BF16 checkpoint (~46 GB, runtime fp8_cast downcasts on the fly)
+    checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-dev.safetensors")
     if not os.path.exists(checkpoint_path):
-        logger.info("Downloading LTX-2.3 FP8 checkpoint (~29 GB) ...")
+        logger.info("Downloading LTX-2.3 BF16 checkpoint (~46 GB) ...")
         hf_hub_download(
-            repo_id="Lightricks/LTX-2.3-fp8",
-            filename="ltx-2.3-22b-dev-fp8.safetensors",
+            repo_id="Lightricks/LTX-2.3",
+            filename="ltx-2.3-22b-dev.safetensors",
             local_dir=model_dir,
             token=hf_token,
         )
     else:
-        logger.info("LTX-2.3 FP8 checkpoint already cached.")
+        logger.info("LTX-2.3 checkpoint already cached.")
 
     # 2. Spatial upscaler 2x (~1 GB)
     upscaler_path = os.path.join(
