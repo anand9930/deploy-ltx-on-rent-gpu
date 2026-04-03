@@ -48,14 +48,9 @@ class LTXVideoGenerator:
 
         self._encode_video = encode_video
 
-        # FP8 quantization — reduces VRAM by ~40%
+        # No runtime quantization needed — checkpoint is already FP8.
+        # Re-enable fp8_cast() here if switching to a BF16 checkpoint.
         quantization = None
-        try:
-            from ltx_core.quantization import QuantizationPolicy
-            quantization = QuantizationPolicy.fp8_cast()
-            logger.info("Using FP8 quantization")
-        except ImportError:
-            logger.warning("QuantizationPolicy not available, running without quantization")
 
         # CPU weight caching — only one model on GPU at a time
         registry = None
