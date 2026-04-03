@@ -78,23 +78,26 @@ class LTXVideoGenerator:
             self._pipeline.stage_1_model_ledger.registry = registry
             self._pipeline.stage_2_model_ledger.registry = registry
             logger.info("Switched to StateDictRegistry (CPU weight caching)")
-        except ImportError:
-            logger.warning("StateDictRegistry not available")
+        except (ImportError, AttributeError):
+            logger.warning("StateDictRegistry not available or pipeline API changed, skipping")
 
         # Monkey-patch encode_prompts to free text encoder VRAM after use
-        import ltx_pipelines.ti2vid_two_stages as _mod
-        _orig = _mod.encode_prompts
+        try:
+            import ltx_pipelines.ti2vid_two_stages as _mod
+            _orig = _mod.encode_prompts
 
-        def _encode_with_cleanup(*args, **kwargs):
-            self._log_vram("before encode_prompts")
-            result = _orig(*args, **kwargs)
-            self._log_vram("after encode_prompts")
-            gc.collect()
-            torch.cuda.empty_cache()
-            self._log_vram("after VRAM cleanup")
-            return result
+            def _encode_with_cleanup(*args, **kwargs):
+                self._log_vram("before encode_prompts")
+                result = _orig(*args, **kwargs)
+                self._log_vram("after encode_prompts")
+                gc.collect()
+                torch.cuda.empty_cache()
+                self._log_vram("after VRAM cleanup")
+                return result
 
-        _mod.encode_prompts = _encode_with_cleanup
+            _mod.encode_prompts = _encode_with_cleanup
+        except AttributeError:
+            logger.warning("encode_prompts not found in module, skipping VRAM cleanup patch")
 
         # Optional components (guiders, tiling)
         self._MultiModalGuiderParams = None
