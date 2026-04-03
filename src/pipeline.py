@@ -170,7 +170,7 @@ class LTXVideoGenerator:
                 height=height, width=width, num_frames=num_frames,
                 frame_rate=frame_rate, num_inference_steps=num_inference_steps,
                 images=[],
-                streaming_prefetch_count=2,  # CPU offload: build Gemma on CPU, stream layers to GPU
+                # No streaming needed — 48GB GPU fits text encoder + diffusion model
             )
             if video_guider_params is not None:
                 call_kwargs["video_guider_params"] = video_guider_params
