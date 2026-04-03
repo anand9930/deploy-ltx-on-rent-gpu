@@ -37,16 +37,25 @@ src/download_models.py  Idempotent model downloader from HuggingFace
 
 ## Deploy
 
-### Vast.ai (cheapest)
+### RunPod (recommended — persistent volumes, HTTPS endpoint)
+
+```bash
+brew install runpod/runpodctl/runpodctl
+export RUNPOD_API_KEY=your_key
+./deploy/runpod/deploy.sh
+```
+
+RTX 4090 Secure Cloud: $0.59/hr + $7/mo storage. See [deploy/runpod/README.md](deploy/runpod/README.md).
+
+### Vast.ai (cheapest hourly rate)
 
 ```bash
 pip install vastai
 vastai set api-key YOUR_KEY
-export HF_TOKEN=hf_YOUR_TOKEN
 ./deploy/vast/deploy.sh
 ```
 
-See [deploy/vast/README.md](deploy/vast/README.md) for full instructions, volume setup, and cost details.
+RTX 4090: ~$0.27/hr + $5.60/mo storage. See [deploy/vast/README.md](deploy/vast/README.md).
 
 ### Any Docker host
 
