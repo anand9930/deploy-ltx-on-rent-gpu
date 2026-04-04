@@ -172,9 +172,11 @@ class LTXVideoGenerator:
             # Run pipeline
             start_time = time.time()
 
-            # Auto-detect: stream text encoder from CPU on ≤24GB GPUs, skip on larger GPUs
+            # Auto-detect: stream text encoder from CPU on <48GB GPUs.
+            # Gemma 3 12B uses ~26GB at BF16, so GPUs ≤32GB don't have enough
+            # headroom for both the encoder and the processing pipeline.
             gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9 if torch.cuda.is_available() else 0
-            streaming = 2 if gpu_vram_gb <= 26 else None
+            streaming = 2 if gpu_vram_gb < 40 else None
             if streaming:
                 logger.info("Job %s: using CPU streaming (GPU VRAM: %.0f GB)", job_id, gpu_vram_gb)
 
