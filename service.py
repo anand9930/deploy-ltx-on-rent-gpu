@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 @bentoml.service(
     name="ltx-video-generator",
     resources={"gpu": 1},
-    traffic={"timeout": 300, "max_concurrency": 1},
+    traffic={"timeout": 300, "max_concurrency": 3},
     workers=1,
 )
 class LTXVideoService:
