@@ -172,13 +172,16 @@ class LTXVideoGenerator:
             # Run pipeline
             start_time = time.time()
 
-            # Auto-detect: stream text encoder from CPU on <48GB GPUs.
-            # Gemma 3 12B uses ~26GB at BF16, so GPUs ≤32GB don't have enough
-            # headroom for both the encoder and the processing pipeline.
+            # Streaming: builds models on CPU, streams layers to GPU on demand.
+            # Required for <48GB GPUs — without it, LoRA fusion OOMs because
+            # the 22B transformer + LoRA deltas exceed GPU memory.
+            # With streaming, build+fuse happens on CPU (plenty of RAM),
+            # then only 2-3 layers live on GPU at any time during inference.
+            # max_batch_size=4 batches guidance passes to reduce PCIe round-trips.
             gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9 if torch.cuda.is_available() else 0
             streaming = 2 if gpu_vram_gb < 40 else None
             if streaming:
-                logger.info("Job %s: using CPU streaming (GPU VRAM: %.0f GB)", job_id, gpu_vram_gb)
+                logger.info("Job %s: streaming enabled (GPU VRAM: %.0f GB < 40 GB)", job_id, gpu_vram_gb)
 
             call_kwargs = dict(
                 prompt=prompt, negative_prompt=negative_prompt, seed=seed,
@@ -186,6 +189,7 @@ class LTXVideoGenerator:
                 frame_rate=frame_rate, num_inference_steps=num_inference_steps,
                 images=[],
                 streaming_prefetch_count=streaming,
+                max_batch_size=4 if streaming else 1,
             )
             if video_guider_params is not None:
                 call_kwargs["video_guider_params"] = video_guider_params
