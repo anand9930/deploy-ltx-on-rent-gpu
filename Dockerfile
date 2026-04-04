@@ -1,8 +1,9 @@
 # ============================================================================
 # LTX-2.3 22B — BentoML video generation service
 # ============================================================================
-# Models are expected at $MODEL_DIR (default /models), typically mounted
-# as a volume.  Downloaded on first boot if not already present (~64 GB).
+# Default mode (USE_GGUF=1): Downloads GGUF distilled model (~47 GB total),
+# converts to safetensors on first boot. Faster cold start, 8-step inference.
+# Legacy mode (USE_GGUF=0): Downloads BF16 checkpoint + LoRA (~80 GB total).
 # ============================================================================
 
 FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
@@ -10,7 +11,8 @@ FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-    HF_HOME=/models/huggingface
+    HF_HOME=/models/huggingface \
+    USE_GGUF=1
 
 # ---- System dependencies + uv ----------------------------------------------
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv

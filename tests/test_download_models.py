@@ -14,24 +14,42 @@ class TestEnsureModelsDownloaded:
             with pytest.raises(RuntimeError, match="HF_TOKEN"):
                 ensure_models_downloaded(str(tmp_path))
 
-    def test_skips_existing_files(self, tmp_path):
-        """If all model files exist, no downloads should happen."""
+    def test_skips_existing_files_original_mode(self, tmp_path):
+        """If all model files exist in original mode, no downloads should happen."""
         from src.download_models import ensure_models_downloaded
 
-        # Create fake model files
-        (tmp_path / "ltx-2.3-22b-dev-fp8.safetensors").touch()
+        # Create fake model files for original mode
+        (tmp_path / "ltx-2.3-22b-dev.safetensors").touch()
         (tmp_path / "ltx-2.3-spatial-upscaler-x2-1.1.safetensors").touch()
         (tmp_path / "ltx-2.3-22b-distilled-lora-384.safetensors").touch()
         gemma_dir = tmp_path / "gemma-3-12b-it-qat-q4_0-unquantized"
         gemma_dir.mkdir()
         (gemma_dir / "model.safetensors").touch()
 
-        with patch.dict(os.environ, {"HF_TOKEN": "hf_test"}):
+        with patch.dict(os.environ, {"HF_TOKEN": "hf_test", "USE_GGUF": "0"}):
             with patch("src.download_models.hf_hub_download") as mock_dl, \
                  patch("src.download_models.snapshot_download") as mock_snap:
                 ensure_models_downloaded(str(tmp_path))
 
-        # No downloads should have been triggered
+        mock_dl.assert_not_called()
+        mock_snap.assert_not_called()
+
+    def test_skips_existing_files_gguf_mode(self, tmp_path):
+        """If converted checkpoint exists in GGUF mode, no downloads should happen."""
+        from src.download_models import ensure_models_downloaded
+
+        # Create fake converted file + other cached files
+        (tmp_path / "ltx-2.3-22b-distilled.safetensors").touch()
+        (tmp_path / "ltx-2.3-spatial-upscaler-x2-1.1.safetensors").touch()
+        gemma_dir = tmp_path / "gemma-3-12b-it-qat-q4_0-unquantized"
+        gemma_dir.mkdir()
+        (gemma_dir / "model.safetensors").touch()
+
+        with patch.dict(os.environ, {"HF_TOKEN": "hf_test", "USE_GGUF": "1"}):
+            with patch("src.download_models.hf_hub_download") as mock_dl, \
+                 patch("src.download_models.snapshot_download") as mock_snap:
+                ensure_models_downloaded(str(tmp_path))
+
         mock_dl.assert_not_called()
         mock_snap.assert_not_called()
 
@@ -40,7 +58,8 @@ class TestEnsureModelsDownloaded:
         from src.download_models import ensure_models_downloaded
 
         model_dir = tmp_path / "subdir" / "models"
-        with patch.dict(os.environ, {"HF_TOKEN": "hf_test"}):
+        # Use original mode to avoid GGUF conversion complexity
+        with patch.dict(os.environ, {"HF_TOKEN": "hf_test", "USE_GGUF": "0"}):
             with patch("src.download_models.hf_hub_download"), \
                  patch("src.download_models.snapshot_download"):
                 ensure_models_downloaded(str(model_dir))

@@ -2,6 +2,7 @@
 set -e
 
 echo "=== LTX-2.3 Video Generation Service ==="
+echo "Mode: ${USE_GGUF:+GGUF distilled}${USE_GGUF:-Original BF16+LoRA}"
 echo "MODEL_DIR=${MODEL_DIR:-/models}"
 echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo 'not available')"
 

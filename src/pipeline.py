@@ -1,5 +1,9 @@
 """Shared LTX-2.3 pipeline wrapper.
 
+Supports two modes controlled by USE_GGUF env var (default: "1"):
+  USE_GGUF=1  DistilledPipeline — 8-step schedule, no guidance, no LoRA
+  USE_GGUF=0  TI2VidTwoStagesPipeline — dev model + LoRA, configurable guidance
+
 All VRAM optimisation techniques live here.
 """
 
@@ -18,6 +22,8 @@ DEFAULT_NEGATIVE_PROMPT = (
     "low resolution, watermark, text, oversaturated"
 )
 
+USE_GGUF = os.getenv("USE_GGUF", "1") == "1"
+
 
 def _round_to(value: int, divisor: int) -> int:
     return (value // divisor) * divisor
@@ -28,28 +34,25 @@ def _round_frames(n: int) -> int:
 
 
 class LTXVideoGenerator:
-    """Initialises the LTX-2.3 two-stage pipeline and runs inference."""
+    """Initialises the LTX-2.3 pipeline and runs inference."""
 
     def __init__(self, model_dir: str = "/models") -> None:
-        checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-dev.safetensors")
+        from src.download_models import DISTILLED_CHECKPOINT_NAME
+
         spatial_upsampler_path = os.path.join(
             model_dir, "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
         )
-        distilled_lora_path = os.path.join(
-            model_dir, "ltx-2.3-22b-distilled-lora-384.safetensors"
-        )
         gemma_root = os.path.join(model_dir, "gemma-3-12b-it-qat-q4_0-unquantized")
 
-        logger.info("Initializing LTX-2.3 pipeline ...")
+        logger.info("Initializing LTX-2.3 pipeline (mode=%s) ...", "distilled" if USE_GGUF else "dev+LoRA")
         self._log_vram("before pipeline init")
+        self._use_distilled = USE_GGUF
 
-        from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline
         from ltx_pipelines.utils.media_io import encode_video
 
         self._encode_video = encode_video
 
-        # FP8 quantization — downcasts BF16 weights to FP8 on the fly,
-        # upcasts back to BF16 during forward. ~40% VRAM reduction.
+        # FP8 quantization — downcasts BF16 weights to FP8 on the fly
         try:
             from ltx_core.quantization import QuantizationPolicy
             quantization = QuantizationPolicy.fp8_cast()
@@ -67,44 +70,70 @@ class LTXVideoGenerator:
         except ImportError:
             logger.warning("StateDictRegistry not available")
 
-        # Distilled LoRA
-        from ltx_core.loader import (
-            LTXV_LORA_COMFY_RENAMING_MAP,
-            LoraPathStrengthAndSDOps,
-        )
-        distilled_lora = [
-            LoraPathStrengthAndSDOps(
-                path=distilled_lora_path,
-                strength=0.8,
-                sd_ops=LTXV_LORA_COMFY_RENAMING_MAP,
+        if self._use_distilled:
+            # --- Distilled pipeline: no LoRA, no guidance, fixed 8-step schedule ---
+            from ltx_pipelines.distilled import DistilledPipeline
+
+            checkpoint_path = os.path.join(model_dir, DISTILLED_CHECKPOINT_NAME)
+
+            pipeline_kwargs = dict(
+                distilled_checkpoint_path=checkpoint_path,
+                spatial_upsampler_path=spatial_upsampler_path,
+                gemma_root=gemma_root,
+                loras=[],
             )
-        ]
+            if quantization is not None:
+                pipeline_kwargs["quantization"] = quantization
+            if registry is not None:
+                pipeline_kwargs["registry"] = registry
 
-        # Build pipeline — pass registry and quantization at construction time
-        # so VRAM is managed correctly from the start
-        pipeline_kwargs = dict(
-            checkpoint_path=checkpoint_path,
-            distilled_lora=distilled_lora,
-            spatial_upsampler_path=spatial_upsampler_path,
-            gemma_root=gemma_root,
-            loras=[],
-        )
-        if quantization is not None:
-            pipeline_kwargs["quantization"] = quantization
-        if registry is not None:
-            pipeline_kwargs["registry"] = registry
+            self._pipeline = DistilledPipeline(**pipeline_kwargs)
+        else:
+            # --- Original dev+LoRA pipeline ---
+            from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline
+            from ltx_core.loader import (
+                LTXV_LORA_COMFY_RENAMING_MAP,
+                LoraPathStrengthAndSDOps,
+            )
 
-        self._pipeline = TI2VidTwoStagesPipeline(**pipeline_kwargs)
+            checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-dev.safetensors")
+            distilled_lora_path = os.path.join(
+                model_dir, "ltx-2.3-22b-distilled-lora-384.safetensors"
+            )
+            distilled_lora = [
+                LoraPathStrengthAndSDOps(
+                    path=distilled_lora_path,
+                    strength=0.8,
+                    sd_ops=LTXV_LORA_COMFY_RENAMING_MAP,
+                )
+            ]
+
+            pipeline_kwargs = dict(
+                checkpoint_path=checkpoint_path,
+                distilled_lora=distilled_lora,
+                spatial_upsampler_path=spatial_upsampler_path,
+                gemma_root=gemma_root,
+                loras=[],
+            )
+            if quantization is not None:
+                pipeline_kwargs["quantization"] = quantization
+            if registry is not None:
+                pipeline_kwargs["registry"] = registry
+
+            self._pipeline = TI2VidTwoStagesPipeline(**pipeline_kwargs)
+
         self._log_vram("after pipeline init")
 
-        # Optional components (guiders, tiling)
+        # Optional components (guiders — only used in original mode)
         self._MultiModalGuiderParams = None
-        try:
-            from ltx_core.components.guiders import MultiModalGuiderParams
-            self._MultiModalGuiderParams = MultiModalGuiderParams
-        except ImportError:
-            pass
+        if not self._use_distilled:
+            try:
+                from ltx_core.components.guiders import MultiModalGuiderParams
+                self._MultiModalGuiderParams = MultiModalGuiderParams
+            except ImportError:
+                pass
 
+        # Tiling config (used in both modes)
         self._TilingConfig = None
         self._get_video_chunks_number = None
         try:
@@ -127,15 +156,15 @@ class LTXVideoGenerator:
         self,
         prompt: str,
         negative_prompt: str = DEFAULT_NEGATIVE_PROMPT,
-        width: int = 1024,
-        height: int = 1536,
+        width: int = 768,
+        height: int = 512,
         num_frames: int = 121,
-        num_inference_steps: int = 30,
+        num_inference_steps: int = 8,
         seed: int = 42,
         frame_rate: float = 24.0,
-        cfg_scale: float = 3.0,
-        stg_scale: float = 1.0,
-        rescale_scale: float = 0.7,
+        cfg_scale: float = 1.0,
+        stg_scale: float = 0.0,
+        rescale_scale: float = 0.0,
     ) -> dict:
         """Run inference and encode MP4. Returns dict with output_path, output_filename, etc."""
         width = _round_to(width, 64)
@@ -144,24 +173,12 @@ class LTXVideoGenerator:
         job_id = uuid.uuid4().hex[:12]
 
         logger.info(
-            "Job %s: prompt=%r, %dx%d, %d frames, %d steps, seed=%d",
-            job_id, prompt[:80], width, height, num_frames, num_inference_steps, seed,
+            "Job %s: prompt=%r, %dx%d, %d frames, seed=%d, mode=%s",
+            job_id, prompt[:80], width, height, num_frames, seed,
+            "distilled" if self._use_distilled else "dev+LoRA",
         )
 
         try:
-            # Guidance params
-            video_guider_params = None
-            audio_guider_params = None
-            if self._MultiModalGuiderParams is not None:
-                video_guider_params = self._MultiModalGuiderParams(
-                    cfg_scale=cfg_scale, stg_scale=stg_scale,
-                    rescale_scale=rescale_scale, modality_scale=3.0, stg_blocks=[28],
-                )
-                audio_guider_params = self._MultiModalGuiderParams(
-                    cfg_scale=7.0, stg_scale=1.0, rescale_scale=0.7,
-                    modality_scale=3.0, stg_blocks=[28],
-                )
-
             # Tiling config
             tiling_config = None
             video_chunks_number = None
@@ -169,37 +186,52 @@ class LTXVideoGenerator:
                 tiling_config = self._TilingConfig.default()
                 video_chunks_number = self._get_video_chunks_number(num_frames, tiling_config)
 
-            # Run pipeline
+            # Streaming for <40GB GPUs
             start_time = time.time()
-
-            # Streaming: builds models on CPU, streams layers to GPU on demand.
-            # Required for <48GB GPUs — without it, LoRA fusion OOMs because
-            # the 22B transformer + LoRA deltas exceed GPU memory.
-            # With streaming, build+fuse happens on CPU (plenty of RAM),
-            # then only 2-3 layers live on GPU at any time during inference.
-            # max_batch_size=4 batches guidance passes to reduce PCIe round-trips.
             gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9 if torch.cuda.is_available() else 0
             streaming = 2 if gpu_vram_gb < 40 else None
             if streaming:
                 logger.info("Job %s: streaming enabled (GPU VRAM: %.0f GB < 40 GB)", job_id, gpu_vram_gb)
 
-            call_kwargs = dict(
-                prompt=prompt, negative_prompt=negative_prompt, seed=seed,
-                height=height, width=width, num_frames=num_frames,
-                frame_rate=frame_rate, num_inference_steps=num_inference_steps,
-                images=[],
-                streaming_prefetch_count=streaming,
-                max_batch_size=4 if streaming else 1,
-            )
-            if video_guider_params is not None:
-                call_kwargs["video_guider_params"] = video_guider_params
-            if audio_guider_params is not None:
-                call_kwargs["audio_guider_params"] = audio_guider_params
-            if tiling_config is not None:
-                call_kwargs["tiling_config"] = tiling_config
+            if self._use_distilled:
+                # DistilledPipeline: fixed 8-step schedule, no guidance
+                call_kwargs = dict(
+                    prompt=prompt, seed=seed,
+                    height=height, width=width, num_frames=num_frames,
+                    frame_rate=frame_rate, images=[],
+                    streaming_prefetch_count=streaming,
+                )
+                if tiling_config is not None:
+                    call_kwargs["tiling_config"] = tiling_config
 
-            result = self._pipeline(**call_kwargs)
-            video, audio = result if isinstance(result, tuple) else (result, None)
+                video, audio = self._pipeline(**call_kwargs)
+            else:
+                # Original pipeline: configurable steps and guidance
+                call_kwargs = dict(
+                    prompt=prompt, negative_prompt=negative_prompt, seed=seed,
+                    height=height, width=width, num_frames=num_frames,
+                    frame_rate=frame_rate, num_inference_steps=num_inference_steps,
+                    images=[],
+                    streaming_prefetch_count=streaming,
+                    max_batch_size=4 if streaming else 1,
+                )
+
+                if self._MultiModalGuiderParams is not None:
+                    call_kwargs["video_guider_params"] = self._MultiModalGuiderParams(
+                        cfg_scale=cfg_scale, stg_scale=stg_scale,
+                        rescale_scale=rescale_scale, modality_scale=3.0, stg_blocks=[28],
+                    )
+                    call_kwargs["audio_guider_params"] = self._MultiModalGuiderParams(
+                        cfg_scale=7.0, stg_scale=1.0, rescale_scale=0.7,
+                        modality_scale=3.0, stg_blocks=[28],
+                    )
+
+                if tiling_config is not None:
+                    call_kwargs["tiling_config"] = tiling_config
+
+                result = self._pipeline(**call_kwargs)
+                video, audio = result if isinstance(result, tuple) else (result, None)
+
             generation_time = time.time() - start_time
             logger.info("Job %s: generation took %.1fs", job_id, generation_time)
 
@@ -219,9 +251,8 @@ class LTXVideoGenerator:
                 "generation_time_seconds": round(generation_time, 2),
                 "parameters": {
                     "width": width, "height": height, "num_frames": num_frames,
-                    "num_inference_steps": num_inference_steps, "seed": seed,
-                    "frame_rate": frame_rate, "cfg_scale": cfg_scale,
-                    "stg_scale": stg_scale, "rescale_scale": rescale_scale,
+                    "seed": seed, "frame_rate": frame_rate,
+                    "mode": "distilled" if self._use_distilled else "dev+LoRA",
                 },
             }
 
