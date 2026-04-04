@@ -27,19 +27,23 @@ class TestBuildMetadata:
         meta = _build_metadata()
         config = json.loads(meta["config"])
         assert "transformer" in config
-        assert "vae" in config
-        assert "audio_vae" in config
-        assert "vocoder" in config
 
-    def test_transformer_config_has_expected_keys(self):
+    def test_transformer_config_has_v2_flags(self):
         from gguf_converter import _build_metadata
 
         meta = _build_metadata()
         config = json.loads(meta["config"])
         tf = config["transformer"]
-        assert tf["num_layers"] == 48
+        # V2 feature extractor flags (required for 22B models)
+        assert tf["caption_proj_before_connector"] is True
+        assert tf["caption_projection_first_linear"] is False
+        assert tf["caption_proj_input_norm"] is False
+        assert tf["caption_projection_second_linear"] is False
+        # Architecture dims used by FeatureExtractorV2
         assert tf["num_attention_heads"] == 32
         assert tf["attention_head_dim"] == 128
+        assert tf["audio_num_attention_heads"] == 32
+        assert tf["audio_attention_head_dim"] == 64
 
 
 class TestLoadSafetensorsWithPrefix:
@@ -145,7 +149,7 @@ class TestConvertGgufToSafetensors:
 
         assert meta["model_version"] == "2.3"
         config = json.loads(meta["config"])
-        assert config["transformer"]["num_layers"] == 48
+        assert config["transformer"]["caption_proj_before_connector"] is True
 
 
 class TestVocoderKeyHandling:

@@ -112,47 +112,25 @@ def _build_metadata() -> dict[str, str]:
     """
     metadata = {"model_version": "2.3"}
 
+    # Minimal config for LTX-2.3-22B. Only includes values that differ
+    # from from_config() defaults or are required by FeatureExtractorV2.
+    # VAE/audio_vae/vocoder sections omitted — their configurators have
+    # correct defaults.
     config = {
         "transformer": {
+            # V2 feature extractor flags (required for 22B models —
+            # tells the pipeline that caption projection lives in the
+            # text encoder, not the transformer)
+            "caption_proj_before_connector": True,
+            "caption_projection_first_linear": False,
+            "caption_proj_input_norm": False,
+            "caption_projection_second_linear": False,
+            # Architecture dims used by FeatureExtractorV2 via dict[]
+            # (not .get(), so they MUST be present)
             "num_attention_heads": 32,
             "attention_head_dim": 128,
-            "in_channels": 128,
-            "out_channels": 128,
-            "num_layers": 48,
-            "cross_attention_dim": 3584,
-            "caption_channels": 3584,
-            "caption_projection_dim": 4096,
-            "patch_size": 1,
-            "patch_size_t": 1,
-            "activation_fn": "gelu-approximate",
-            "qk_norm": "rms_norm_across_heads",
-        },
-        "vae": {
-            "latent_channels": 128,
-            "base_channels": 128,
-            "encoder_channel_multipliers": [1, 2, 4, 4],
-            "decoder_channel_multipliers": [1, 2, 4, 4],
-            "encoder_num_residual_blocks": [2, 2, 2, 2],
-            "decoder_num_residual_blocks": [2, 2, 2, 2],
-            "scaling_factor": 1.0,
-            "norm_layer": "pixel_norm",
-            "causal": True,
-            "timestep_conditioning": True,
-        },
-        "audio_vae": {
-            "latent_channels": 64,
-            "base_channels": 128,
-            "encoder_channel_multipliers": [1, 2, 4, 4],
-            "decoder_channel_multipliers": [1, 2, 4, 4],
-            "encoder_num_residual_blocks": [2, 2, 2, 2],
-            "decoder_num_residual_blocks": [2, 2, 2, 2],
-            "scaling_factor": 1.0,
-            "norm_layer": "pixel_norm",
-            "causal": True,
-            "timestep_conditioning": True,
-        },
-        "vocoder": {
-            "type": "bigvgan_v2_bwe",
+            "audio_num_attention_heads": 32,
+            "audio_attention_head_dim": 64,
         },
     }
     metadata["config"] = json.dumps(config)
