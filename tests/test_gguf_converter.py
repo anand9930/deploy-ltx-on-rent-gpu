@@ -205,8 +205,8 @@ class TestDownloadModels:
     @patch("download_models.hf_hub_download")
     @patch("download_models.snapshot_download")
     @patch.dict(os.environ, {"HF_TOKEN": "test", "USE_GGUF": "1"})
-    def test_gguf_mode_skips_when_cached(self, mock_snap, mock_hf, tmp_path):
-        from download_models import _download_gguf_models
+    def test_distilled_mode_skips_when_cached(self, mock_snap, mock_hf, tmp_path):
+        from download_models import _download_distilled_models
 
         model_dir = str(tmp_path)
         (tmp_path / "ltx-2.3-22b-distilled.safetensors").touch()
@@ -215,6 +215,6 @@ class TestDownloadModels:
         gemma_dir.mkdir()
         (gemma_dir / "model.safetensors").touch()
 
-        _download_gguf_models(model_dir)
+        _download_distilled_models(model_dir)
         mock_hf.assert_not_called()
         mock_snap.assert_not_called()
