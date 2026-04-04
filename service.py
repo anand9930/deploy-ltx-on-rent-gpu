@@ -41,12 +41,12 @@ class LTXVideoService:
         width: Annotated[int, Field(ge=256, le=1920)] = 1024,
         height: Annotated[int, Field(ge=256, le=1920)] = 1536,
         num_frames: Annotated[int, Field(ge=9, le=257)] = 121,
-        num_inference_steps: Annotated[int, Field(ge=1, le=100)] = 30,
+        num_inference_steps: Annotated[int, Field(ge=1, le=100)] = 8,
         seed: int = 42,
         frame_rate: float = 24.0,
         cfg_scale: float = 3.0,
-        stg_scale: float = 1.0,
-        rescale_scale: float = 0.7,
+        stg_scale: float = 0.0,
+        rescale_scale: float = 0.45,
         upload_to_supabase: bool = True,
     ) -> dict:
         result = self.generator.generate(
@@ -83,12 +83,12 @@ class LTXVideoService:
         width: Annotated[int, Field(ge=256, le=1920)] = 1024,
         height: Annotated[int, Field(ge=256, le=1920)] = 1536,
         num_frames: Annotated[int, Field(ge=9, le=257)] = 121,
-        num_inference_steps: Annotated[int, Field(ge=1, le=100)] = 30,
+        num_inference_steps: Annotated[int, Field(ge=1, le=100)] = 8,
         seed: int = 42,
         frame_rate: float = 24.0,
         cfg_scale: float = 3.0,
-        stg_scale: float = 1.0,
-        rescale_scale: float = 0.7,
+        stg_scale: float = 0.0,
+        rescale_scale: float = 0.45,
     ) -> Annotated[Path, bentoml.validators.ContentType("video/*")]:
         result = self.generator.generate(
             prompt=prompt, negative_prompt=negative_prompt,
