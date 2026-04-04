@@ -179,8 +179,12 @@ class LTXVideoGenerator:
             try:
                 yield encoder
             finally:
+                # Force full cleanup — bitsandbytes models hold GPU memory aggressively
+                encoder.model = None
                 del encoder
                 import gc
+                gc.collect()
+                torch.cuda.empty_cache()
                 gc.collect()
                 torch.cuda.empty_cache()
 
