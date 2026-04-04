@@ -1,6 +1,7 @@
 """Shared LTX-2.3 pipeline wrapper.
 
-All VRAM optimisation techniques live here.
+Uses TI2VidTwoStagesHQPipeline with res_2s sampler for faster inference
+(15 steps vs 30) and torch.compile for optimized transformer blocks.
 """
 
 import logging
@@ -8,7 +9,6 @@ import os
 import tempfile
 import time
 import uuid
-from contextlib import contextmanager
 
 import torch
 
@@ -28,43 +28,13 @@ def _round_frames(n: int) -> int:
     return ((n - 1) // 8) * 8 + 1
 
 
-def _load_8bit_gemma(gemma_root: str):
-    """Load Gemma 3 12B with INT8 quantization via bitsandbytes.
-
-    Uses ~12GB VRAM instead of ~26GB, allowing the full pipeline
-    to fit on 24-32GB GPUs without CPU streaming.
-    """
-    from pathlib import Path
-
-    from transformers import BitsAndBytesConfig, Gemma3ForConditionalGeneration
-
-    from ltx_core.text_encoders.gemma.encoders.base_encoder import (
-        GemmaTextEncoder,
-        find_matching_file,
-    )
-    from ltx_core.text_encoders.gemma.tokenizer import LTXVGemmaTokenizer
-
-    gemma_path = str(find_matching_file(gemma_root, "model*.safetensors").parent)
-    tokenizer_path = str(find_matching_file(gemma_root, "tokenizer.model").parent)
-
-    logger.info("Loading Gemma 3 12B with INT8 quantization (bitsandbytes)...")
-    quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-    gemma_model = Gemma3ForConditionalGeneration.from_pretrained(
-        gemma_path,
-        quantization_config=quantization_config,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        local_files_only=True,
-    )
-
-    tokenizer = LTXVGemmaTokenizer(tokenizer_path, 1024)
-    encoder = GemmaTextEncoder(tokenizer=tokenizer, model=gemma_model, dtype=torch.bfloat16)
-    logger.info("Gemma INT8 loaded successfully")
-    return encoder
-
-
 class LTXVideoGenerator:
-    """Initialises the LTX-2.3 two-stage pipeline and runs inference."""
+    """Initialises the LTX-2.3 HQ pipeline and runs inference.
+
+    Uses TI2VidTwoStagesHQPipeline (res_2s sampler, 15 steps Stage 1)
+    instead of TI2VidTwoStagesPipeline (Euler, 30 steps Stage 1).
+    ~2x faster with comparable quality.
+    """
 
     def __init__(self, model_dir: str = "/models") -> None:
         checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-dev.safetensors")
@@ -74,18 +44,17 @@ class LTXVideoGenerator:
         distilled_lora_path = os.path.join(
             model_dir, "ltx-2.3-22b-distilled-lora-384.safetensors"
         )
-        self._gemma_root = os.path.join(model_dir, "gemma-3-12b-it-qat-q4_0-unquantized")
+        gemma_root = os.path.join(model_dir, "gemma-3-12b-it-qat-q4_0-unquantized")
 
-        logger.info("Initializing LTX-2.3 pipeline ...")
+        logger.info("Initializing LTX-2.3 HQ pipeline ...")
         self._log_vram("before pipeline init")
 
-        from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline
+        from ltx_pipelines.ti2vid_two_stages_hq import TI2VidTwoStagesHQPipeline
         from ltx_pipelines.utils.media_io import encode_video
 
         self._encode_video = encode_video
 
-        # FP8 quantization — downcasts BF16 weights to FP8 on the fly,
-        # upcasts back to BF16 during forward. ~40% VRAM reduction.
+        # FP8 quantization — downcasts BF16 weights to FP8 on the fly
         try:
             from ltx_core.quantization import QuantizationPolicy
             quantization = QuantizationPolicy.fp8_cast()
@@ -94,7 +63,7 @@ class LTXVideoGenerator:
             quantization = None
             logger.warning("QuantizationPolicy not available")
 
-        # CPU weight caching — only one model on GPU at a time
+        # CPU weight caching via registry
         registry = None
         try:
             from ltx_core.loader import StateDictRegistry
@@ -103,7 +72,7 @@ class LTXVideoGenerator:
         except ImportError:
             logger.warning("StateDictRegistry not available")
 
-        # Distilled LoRA
+        # Distilled LoRA — used in BOTH stages with different strengths
         from ltx_core.loader import (
             LTXV_LORA_COMFY_RENAMING_MAP,
             LoraPathStrengthAndSDOps,
@@ -111,39 +80,36 @@ class LTXVideoGenerator:
         distilled_lora = [
             LoraPathStrengthAndSDOps(
                 path=distilled_lora_path,
-                strength=0.8,
+                strength=1.0,  # HQ pipeline handles per-stage strength internally
                 sd_ops=LTXV_LORA_COMFY_RENAMING_MAP,
             )
         ]
 
-        # Build pipeline — pass registry and quantization at construction time
+        # Enable torch.compile for faster transformer blocks
+        use_compile = torch.cuda.is_available()
+        if use_compile:
+            logger.info("torch.compile enabled for transformer optimization")
+
+        # Build HQ pipeline — res_2s sampler, fewer steps, torch.compile
         pipeline_kwargs = dict(
             checkpoint_path=checkpoint_path,
             distilled_lora=distilled_lora,
+            distilled_lora_strength_stage_1=0.25,  # Light LoRA in Stage 1
+            distilled_lora_strength_stage_2=0.5,    # Stronger LoRA in Stage 2
             spatial_upsampler_path=spatial_upsampler_path,
-            gemma_root=self._gemma_root,
-            loras=[],
+            gemma_root=gemma_root,
+            loras=(),
+            torch_compile=use_compile,
         )
         if quantization is not None:
             pipeline_kwargs["quantization"] = quantization
         if registry is not None:
             pipeline_kwargs["registry"] = registry
 
-        self._pipeline = TI2VidTwoStagesPipeline(**pipeline_kwargs)
+        self._pipeline = TI2VidTwoStagesHQPipeline(**pipeline_kwargs)
         self._log_vram("after pipeline init")
 
-        # Check if INT8 Gemma is available — if so, patch the PromptEncoder
-        # to use INT8 instead of BF16 (~12GB vs ~26GB VRAM)
-        self._use_int8_gemma = False
-        try:
-            import bitsandbytes  # noqa: F401
-            self._use_int8_gemma = True
-            logger.info("bitsandbytes available — will use INT8 Gemma text encoder")
-            self._patch_prompt_encoder_for_int8()
-        except ImportError:
-            logger.info("bitsandbytes not available — using default BF16 Gemma")
-
-        # Optional components (guiders, tiling)
+        # Guider params — HQ uses different defaults (no STG, lower rescale)
         self._MultiModalGuiderParams = None
         try:
             from ltx_core.components.guiders import MultiModalGuiderParams
@@ -160,37 +126,7 @@ class LTXVideoGenerator:
         except ImportError:
             pass
 
-        logger.info("Pipeline ready.")
-
-    def _patch_prompt_encoder_for_int8(self):
-        """Replace the PromptEncoder's text encoder context to use INT8 Gemma.
-
-        Instead of loading BF16 Gemma (~26GB) via the Builder, we load INT8
-        Gemma (~12GB) via bitsandbytes. This lets everything fit on GPU
-        without CPU streaming.
-        """
-        prompt_encoder = self._pipeline.prompt_encoder
-        gemma_root = self._gemma_root
-
-        @contextmanager
-        def _int8_text_encoder_ctx(streaming_prefetch_count=None):
-            # Ignore streaming — INT8 fits on GPU directly
-            encoder = _load_8bit_gemma(gemma_root)
-            try:
-                yield encoder
-            finally:
-                # Force full cleanup — bitsandbytes models hold GPU memory aggressively
-                encoder.model = None
-                del encoder
-                import gc
-                gc.collect()
-                torch.cuda.empty_cache()
-                gc.collect()
-                torch.cuda.empty_cache()
-
-        # Replace the _text_encoder_ctx method
-        prompt_encoder._text_encoder_ctx = _int8_text_encoder_ctx
-        logger.info("Patched PromptEncoder to use INT8 Gemma")
+        logger.info("Pipeline ready (HQ mode, res_2s sampler, 15 steps).")
 
     def _log_vram(self, label: str) -> None:
         if torch.cuda.is_available():
@@ -206,12 +142,12 @@ class LTXVideoGenerator:
         width: int = 1024,
         height: int = 1536,
         num_frames: int = 121,
-        num_inference_steps: int = 30,
+        num_inference_steps: int = 15,  # HQ default: 15 (was 30)
         seed: int = 42,
         frame_rate: float = 24.0,
         cfg_scale: float = 3.0,
-        stg_scale: float = 1.0,
-        rescale_scale: float = 0.7,
+        stg_scale: float = 0.0,        # HQ default: 0.0 (was 1.0) — no STG
+        rescale_scale: float = 0.45,    # HQ default: 0.45 (was 0.7)
     ) -> dict:
         """Run inference and encode MP4. Returns dict with output_path, output_filename, etc."""
         width = _round_to(width, 64)
@@ -225,17 +161,18 @@ class LTXVideoGenerator:
         )
 
         try:
-            # Guidance params
+            # HQ guidance params — no STG (saves ~30% per step)
             video_guider_params = None
             audio_guider_params = None
             if self._MultiModalGuiderParams is not None:
                 video_guider_params = self._MultiModalGuiderParams(
                     cfg_scale=cfg_scale, stg_scale=stg_scale,
-                    rescale_scale=rescale_scale, modality_scale=3.0, stg_blocks=[28],
+                    rescale_scale=rescale_scale, modality_scale=3.0,
+                    skip_step=0, stg_blocks=[],
                 )
                 audio_guider_params = self._MultiModalGuiderParams(
-                    cfg_scale=7.0, stg_scale=1.0, rescale_scale=0.7,
-                    modality_scale=3.0, stg_blocks=[28],
+                    cfg_scale=7.0, stg_scale=0.0, rescale_scale=1.0,
+                    modality_scale=3.0, skip_step=0, stg_blocks=[],
                 )
 
             # Tiling config
@@ -245,17 +182,13 @@ class LTXVideoGenerator:
                 tiling_config = self._TilingConfig.default()
                 video_chunks_number = self._get_video_chunks_number(num_frames, tiling_config)
 
-            # Run pipeline
+            # Streaming: build models on CPU, stream layers to GPU.
+            # Required for <48GB GPUs to avoid OOM during LoRA fusion.
             start_time = time.time()
-
-            # With INT8 Gemma, no streaming needed — everything fits on GPU.
-            # Without INT8 (BF16), stream on GPUs <40GB to avoid OOM.
-            streaming = None
-            if not self._use_int8_gemma:
-                gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9 if torch.cuda.is_available() else 0
-                streaming = 2 if gpu_vram_gb < 40 else None
-                if streaming:
-                    logger.info("Job %s: using CPU streaming (GPU VRAM: %.0f GB)", job_id, gpu_vram_gb)
+            gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9 if torch.cuda.is_available() else 0
+            streaming = 2 if gpu_vram_gb < 40 else None
+            if streaming:
+                logger.info("Job %s: streaming enabled (GPU VRAM: %.0f GB < 40 GB)", job_id, gpu_vram_gb)
 
             call_kwargs = dict(
                 prompt=prompt, negative_prompt=negative_prompt, seed=seed,
@@ -263,6 +196,7 @@ class LTXVideoGenerator:
                 frame_rate=frame_rate, num_inference_steps=num_inference_steps,
                 images=[],
                 streaming_prefetch_count=streaming,
+                max_batch_size=4 if streaming else 1,
             )
             if video_guider_params is not None:
                 call_kwargs["video_guider_params"] = video_guider_params
