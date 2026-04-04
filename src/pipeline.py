@@ -171,12 +171,19 @@ class LTXVideoGenerator:
 
             # Run pipeline
             start_time = time.time()
+
+            # Auto-detect: stream text encoder from CPU on ≤24GB GPUs, skip on larger GPUs
+            gpu_vram_gb = torch.cuda.get_device_properties(0).total_mem / 1e9 if torch.cuda.is_available() else 0
+            streaming = 2 if gpu_vram_gb <= 26 else None
+            if streaming:
+                logger.info("Job %s: using CPU streaming (GPU VRAM: %.0f GB)", job_id, gpu_vram_gb)
+
             call_kwargs = dict(
                 prompt=prompt, negative_prompt=negative_prompt, seed=seed,
                 height=height, width=width, num_frames=num_frames,
                 frame_rate=frame_rate, num_inference_steps=num_inference_steps,
                 images=[],
-                streaming_prefetch_count=2,  # CPU offload: build Gemma on CPU, stream layers to GPU
+                streaming_prefetch_count=streaming,
             )
             if video_guider_params is not None:
                 call_kwargs["video_guider_params"] = video_guider_params
