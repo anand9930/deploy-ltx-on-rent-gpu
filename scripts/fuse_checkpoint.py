@@ -26,6 +26,7 @@ skipping all runtime LoRA fusion and FP8 quantization.
 
 import argparse
 import logging
+import os
 import sys
 import time
 
@@ -65,6 +66,10 @@ def fuse_lora_into_checkpoint(
     )
 
     # Build LoRA key mapping: find all lora_A/lora_B pairs
+    # LoRA keys often have a "diffusion_model." prefix (ComfyUI format)
+    # that the checkpoint keys don't. We try both with and without the prefix.
+    KNOWN_PREFIXES = ["diffusion_model.", "model.diffusion_model.", ""]
+
     lora_pairs: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
     for key in lora_sd:
         if ".lora_A.weight" in key:
@@ -75,13 +80,27 @@ def fuse_lora_into_checkpoint(
 
     logger.info("Found %d LoRA pairs to fuse (strength=%.2f)", len(lora_pairs), strength)
 
+    # Log a sample LoRA key for debugging
+    if lora_pairs:
+        sample_key = next(iter(lora_pairs))
+        logger.info("  Sample LoRA prefix: %s", sample_key)
+        logger.info("  Sample checkpoint keys: %s", list(checkpoint_sd.keys())[:3])
+
     # Fuse LoRA deltas into checkpoint weights
     fused_count = 0
+    skipped_keys = []
     t0 = time.time()
     for prefix, (lora_a, lora_b) in lora_pairs.items():
-        weight_key = f"{prefix}.weight"
-        if weight_key not in checkpoint_sd:
-            # Try with common key remappings (ComfyUI format)
+        # Try matching checkpoint key with known prefix stripping
+        weight_key = None
+        for strip_prefix in KNOWN_PREFIXES:
+            candidate = prefix.removeprefix(strip_prefix) + ".weight"
+            if candidate in checkpoint_sd:
+                weight_key = candidate
+                break
+
+        if weight_key is None:
+            skipped_keys.append(prefix)
             continue
 
         weight = checkpoint_sd[weight_key]
@@ -112,11 +131,21 @@ def fuse_lora_into_checkpoint(
         fused_count, len(lora_pairs), time.time() - t0,
     )
 
+    if skipped_keys:
+        logger.warning("  Skipped %d LoRA keys (no match in checkpoint):", len(skipped_keys))
+        for k in skipped_keys[:5]:
+            logger.warning("    %s", k)
+
     if fused_count == 0:
         logger.error(
-            "No weights were fused! LoRA key format may not match checkpoint. "
-            "Check if the LoRA needs key remapping (e.g., LTXV_LORA_COMFY_RENAMING_MAP)."
+            "No weights were fused! LoRA keys don't match checkpoint keys. "
+            "Sample LoRA prefix: %s, Sample checkpoint key: %s",
+            next(iter(lora_pairs), "N/A"),
+            next(iter(checkpoint_sd), "N/A"),
         )
+        # Clean up partial output
+        if os.path.exists(output_path):
+            os.remove(output_path)
         sys.exit(1)
 
     # Quantize remaining BF16 weights to FP8 (if starting from BF16 checkpoint)

@@ -104,17 +104,23 @@ def ensure_models_downloaded(model_dir: str) -> None:
     if not os.path.exists(fused_path):
         logger.info("Creating pre-fused Stage 2 checkpoint (LoRA strength=0.8) ...")
         logger.info("  This is a one-time operation (~2-5 min, needs ~40 GB RAM)")
-        import importlib.util, sys
-        _script_path = os.path.join(os.path.dirname(__file__), "..", "scripts", "fuse_checkpoint.py")
+        import importlib.util
+        _script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "fuse_checkpoint.py")
         _spec = importlib.util.spec_from_file_location("fuse_checkpoint", _script_path)
         _mod = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_mod)
-        _mod.fuse_lora_into_checkpoint(
-            checkpoint_path=dev_fp8_path,
-            lora_path=lora_path,
-            strength=0.8,
-            output_path=fused_path,
-        )
+        try:
+            _mod.fuse_lora_into_checkpoint(
+                checkpoint_path=dev_fp8_path,
+                lora_path=lora_path,
+                strength=0.8,
+                output_path=fused_path,
+            )
+        except Exception:
+            # Remove partial output so next boot retries
+            if os.path.exists(fused_path):
+                os.remove(fused_path)
+            raise
     else:
         logger.info("Pre-fused Stage 2 checkpoint already cached.")
 
