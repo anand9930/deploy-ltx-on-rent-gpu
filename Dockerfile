@@ -34,7 +34,6 @@ RUN uv pip install --system --no-cache /app
 
 # ---- Copy application code -------------------------------------------------
 COPY src/ /app/src/
-COPY scripts/ /app/scripts/
 COPY service.py /app/service.py
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
