@@ -22,7 +22,7 @@ docker:
 
 envs:
   - name: PYTORCH_CUDA_ALLOC_CONF
-    value: "expandable_segments:True"
+    value: "expandable_segments:True,pinned_num_register_threads:8,garbage_collection_threshold:0.8,max_split_size_mb:512"
   - name: HF_HOME
     value: "/models/huggingface"
   - name: MODEL_DIR

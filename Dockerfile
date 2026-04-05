@@ -9,7 +9,7 @@ FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
-    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,pinned_num_register_threads:8,garbage_collection_threshold:0.8,max_split_size_mb:512 \
     HF_HOME=/models/huggingface
 
 # ---- System dependencies + uv ----------------------------------------------

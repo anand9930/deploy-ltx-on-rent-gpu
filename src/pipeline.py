@@ -201,7 +201,8 @@ class LTXVideoGenerator:
             result = self._pipeline(**call_kwargs)
             video, audio = result if isinstance(result, tuple) else (result, None)
             generation_time = time.time() - start_time
-            logger.info("Job %s: generation took %.1fs", job_id, generation_time)
+            self._log_vram("after inference")
+            logger.info("Job %s: inference took %.1fs", job_id, generation_time)
 
             # Encode video
             output_filename = f"ltx_{job_id}.mp4"
@@ -211,7 +212,13 @@ class LTXVideoGenerator:
                 encode_kwargs["audio"] = audio
             if video_chunks_number is not None:
                 encode_kwargs["video_chunks_number"] = video_chunks_number
+            encode_start = time.time()
             self._encode_video(**encode_kwargs)
+            encode_time = time.time() - encode_start
+            logger.info(
+                "Job %s: video encoding took %.1fs (inference: %.1fs, encoding: %.1fs)",
+                job_id, encode_time, generation_time, encode_time,
+            )
 
             return {
                 "output_path": output_path,
