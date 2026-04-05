@@ -1,9 +1,10 @@
-"""LTX-2.3 HQ two-stage pipeline.
+"""LTX-2.3 two-stage pipeline using distilled-fp8 checkpoint.
 
-Uses official Lightricks FP8 checkpoints — no LoRA fusion needed:
-- Stage 1: dev-fp8 (29 GB) — full model with CFG guidance
-- Stage 2: distilled-fp8 (29.5 GB) — distillation baked in by Lightricks
-- Gemma text encoder loaded sequentially (freed before transformer)
+Uses the SAME distilled-fp8 model for both stages (matching the official
+DistilledPipeline design). No LoRA fusion needed.
+
+- Stage 1: distilled-fp8, CFG guidance, configurable steps
+- Stage 2: distilled-fp8, SimpleDenoiser, distilled sigma schedule
 - Streaming for GPUs < 40 GB, pure GPU for >= 40 GB
 """
 
@@ -32,27 +33,14 @@ def _round_frames(n: int) -> int:
 
 
 class LTXVideoGenerator:
-    """LTX-2.3 HQ video generator.
-
-    Stage 1: dev-fp8 checkpoint, CFG guidance, 30 steps
-    Stage 2: distilled-fp8 checkpoint, SimpleDenoiser, ~8 steps
-    No LoRA fusion — both checkpoints are official pre-built FP8.
-    """
+    """LTX-2.3 video generator using distilled-fp8 for both stages."""
 
     def __init__(self, model_dir: str = "/models") -> None:
-        # Stage 1: dev-fp8 checkpoint
-        stage1_path = os.path.join(model_dir, "ltx-2.3-22b-dev-fp8.safetensors")
-        if not os.path.exists(stage1_path):
+        # Single checkpoint for both stages — same model, no latent space mismatch
+        checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-distilled-fp8.safetensors")
+        if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(
-                f"Stage 1 checkpoint not found: {stage1_path}\n"
-                "Run: python -m src.download_models"
-            )
-
-        # Stage 2: distilled-fp8 checkpoint (distillation baked in, no LoRA)
-        stage2_path = os.path.join(model_dir, "ltx-2.3-22b-distilled-fp8.safetensors")
-        if not os.path.exists(stage2_path):
-            raise FileNotFoundError(
-                f"Stage 2 checkpoint not found: {stage2_path}\n"
+                f"Checkpoint not found: {checkpoint_path}\n"
                 "Run: python -m src.download_models"
             )
 
@@ -61,9 +49,8 @@ class LTXVideoGenerator:
         )
         gemma_root = os.path.join(model_dir, "gemma-3-12b-it-qat-q4_0-unquantized")
 
-        logger.info("Initializing LTX-2.3 HQ pipeline ...")
-        logger.info("  Stage 1: %s", os.path.basename(stage1_path))
-        logger.info("  Stage 2: %s (no LoRA fusion needed)", os.path.basename(stage2_path))
+        logger.info("Initializing LTX-2.3 pipeline ...")
+        logger.info("  Checkpoint: %s (both stages)", os.path.basename(checkpoint_path))
         self._log_vram("before pipeline init")
 
         from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline
@@ -72,7 +59,6 @@ class LTXVideoGenerator:
         self._encode_video = encode_video
 
         # FP8 quantization policy — wraps linear layers with Fp8CastLinear
-        # for runtime FP8→BF16 upcast during forward pass.
         quantization = None
         try:
             from ltx_core.quantization import QuantizationPolicy
@@ -81,7 +67,7 @@ class LTXVideoGenerator:
         except ImportError:
             logger.warning("  QuantizationPolicy not available")
 
-        # CPU weight caching — reuse loaded weights across calls
+        # CPU weight caching
         registry = None
         try:
             from ltx_core.loader import StateDictRegistry
@@ -91,14 +77,13 @@ class LTXVideoGenerator:
 
         use_compile = torch.cuda.is_available()
 
-        # Build pipeline — no LoRA, two separate checkpoints
+        # Build pipeline — same checkpoint for both stages, no LoRA
         pipeline_kwargs = dict(
-            checkpoint_path=stage1_path,
-            distilled_lora=[],  # No LoRA — distilled-fp8 has it baked in
+            checkpoint_path=checkpoint_path,
+            distilled_lora=[],
             spatial_upsampler_path=spatial_upsampler_path,
             gemma_root=gemma_root,
             loras=[],
-            stage_2_checkpoint_path=stage2_path,
             torch_compile=use_compile,
         )
         if quantization is not None:
@@ -150,7 +135,7 @@ class LTXVideoGenerator:
         stg_scale: float = 1.0,
         rescale_scale: float = 0.7,
     ) -> dict:
-        """Run HQ inference and encode MP4."""
+        """Run inference and encode MP4."""
         width = _round_to(width, 64)
         height = _round_to(height, 64)
         num_frames = _round_frames(num_frames)
@@ -165,7 +150,6 @@ class LTXVideoGenerator:
             self._log_vram("before generation")
             start_time = time.time()
 
-            # Guidance params — full HQ with CFG + STG
             video_guider_params = None
             audio_guider_params = None
             if self._MultiModalGuiderParams is not None:
@@ -178,15 +162,12 @@ class LTXVideoGenerator:
                     modality_scale=3.0, stg_blocks=[28],
                 )
 
-            # Tiling for large VAE decode
             tiling_config = None
             video_chunks_number = None
             if self._TilingConfig and self._get_video_chunks_number:
                 tiling_config = self._TilingConfig.default()
                 video_chunks_number = self._get_video_chunks_number(num_frames, tiling_config)
 
-            # Streaming: needed for GPUs < 40 GB (FP8 model ~31 GB on GPU)
-            # No LoRA fusion overhead either way — both checkpoints are pre-built.
             gpu_vram_gb = (
                 torch.cuda.get_device_properties(0).total_memory / 1e9
                 if torch.cuda.is_available() else 0
@@ -194,9 +175,9 @@ class LTXVideoGenerator:
             streaming = 2 if gpu_vram_gb < 40 else None
             max_batch = 4 if streaming else 1
             if streaming:
-                logger.info("Job %s: streaming enabled (GPU %.0f GB < 40 GB)", job_id, gpu_vram_gb)
+                logger.info("Job %s: streaming (GPU %.0f GB < 40 GB)", job_id, gpu_vram_gb)
             else:
-                logger.info("Job %s: pure GPU mode (%.0f GB)", job_id, gpu_vram_gb)
+                logger.info("Job %s: pure GPU (%.0f GB)", job_id, gpu_vram_gb)
 
             call_kwargs = dict(
                 prompt=prompt, negative_prompt=negative_prompt, seed=seed,
@@ -219,7 +200,6 @@ class LTXVideoGenerator:
             logger.info("Job %s: generation took %.1fs", job_id, generation_time)
             self._log_vram("after generation")
 
-            # Encode video
             output_filename = f"ltx_{job_id}.mp4"
             output_path = os.path.join(tempfile.gettempdir(), output_filename)
             encode_kwargs = dict(video=video, fps=int(frame_rate), output_path=output_path)

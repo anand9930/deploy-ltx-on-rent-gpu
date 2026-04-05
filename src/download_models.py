@@ -9,13 +9,12 @@ logger = logging.getLogger(__name__)
 def ensure_models_downloaded(model_dir: str) -> None:
     """Download all required LTX-2.3 models to *model_dir*.
 
-    Downloads official pre-quantized FP8 checkpoints from Lightricks:
-    - dev-fp8 (29 GB) — Stage 1 (full model, CFG guidance)
-    - distilled-fp8 (29.5 GB) — Stage 2 (distillation baked in, no LoRA needed)
+    Downloads:
+    - distilled-fp8 checkpoint (29.5 GB) — used for both stages
     - spatial upscaler (1 GB)
     - Gemma 3 12B text encoder (~26 GB)
 
-    No LoRA fusion required — Lightricks provides both checkpoints pre-built.
+    Total: ~57 GB. No LoRA needed.
     """
     os.makedirs(model_dir, exist_ok=True)
     hf_token = os.getenv("HF_TOKEN")
@@ -25,23 +24,10 @@ def ensure_models_downloaded(model_dir: str) -> None:
             "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized"
         )
 
-    # 1. Stage 1: dev-fp8 (29 GB) — full model for CFG-guided generation
-    dev_fp8_path = os.path.join(model_dir, "ltx-2.3-22b-dev-fp8.safetensors")
-    if not os.path.exists(dev_fp8_path):
-        logger.info("Downloading Stage 1 checkpoint: dev-fp8 (~29 GB) ...")
-        hf_hub_download(
-            repo_id="Lightricks/LTX-2.3-fp8",
-            filename="ltx-2.3-22b-dev-fp8.safetensors",
-            local_dir=model_dir,
-            token=hf_token,
-        )
-    else:
-        logger.info("Stage 1 checkpoint (dev-fp8) already cached.")
-
-    # 2. Stage 2: distilled-fp8 (29.5 GB) — distillation baked in, no LoRA needed
-    distilled_fp8_path = os.path.join(model_dir, "ltx-2.3-22b-distilled-fp8.safetensors")
-    if not os.path.exists(distilled_fp8_path):
-        logger.info("Downloading Stage 2 checkpoint: distilled-fp8 (~29.5 GB) ...")
+    # 1. Distilled-fp8 checkpoint (29.5 GB) — both stages use this
+    checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-distilled-fp8.safetensors")
+    if not os.path.exists(checkpoint_path):
+        logger.info("Downloading LTX-2.3 distilled-fp8 checkpoint (~29.5 GB) ...")
         hf_hub_download(
             repo_id="Lightricks/LTX-2.3-fp8",
             filename="ltx-2.3-22b-distilled-fp8.safetensors",
@@ -49,9 +35,9 @@ def ensure_models_downloaded(model_dir: str) -> None:
             token=hf_token,
         )
     else:
-        logger.info("Stage 2 checkpoint (distilled-fp8) already cached.")
+        logger.info("Distilled-fp8 checkpoint already cached.")
 
-    # 3. Spatial upscaler 2x (~1 GB)
+    # 2. Spatial upscaler 2x (~1 GB)
     upscaler_path = os.path.join(
         model_dir, "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
     )
@@ -66,7 +52,7 @@ def ensure_models_downloaded(model_dir: str) -> None:
     else:
         logger.info("Spatial upscaler already cached.")
 
-    # 4. Gemma 3 12B text encoder (~26 GB)
+    # 3. Gemma 3 12B text encoder (~26 GB)
     gemma_dir = os.path.join(model_dir, "gemma-3-12b-it-qat-q4_0-unquantized")
     gemma_has_weights = os.path.isdir(gemma_dir) and any(
         f.endswith(".safetensors")
