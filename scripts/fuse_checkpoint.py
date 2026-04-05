@@ -65,43 +65,63 @@ def fuse_lora_into_checkpoint(
         time.time() - t0,
     )
 
-    # Build LoRA key mapping: find all lora_A/lora_B pairs
-    # LoRA keys often have a "diffusion_model." prefix (ComfyUI format)
-    # that the checkpoint keys don't. We try both with and without the prefix.
-    KNOWN_PREFIXES = ["diffusion_model.", "model.diffusion_model.", ""]
+    # Key mapping between LoRA and checkpoint:
+    #   LoRA keys:       "diffusion_model.X.lora_A.weight"
+    #   Checkpoint keys: "model.diffusion_model.X.weight"
+    #
+    # At runtime, the LTX pipeline strips these prefixes via sd_ops:
+    #   - Checkpoint: LTXV_MODEL_COMFY_RENAMING_MAP strips "model.diffusion_model."
+    #   - LoRA: LTXV_LORA_COMFY_RENAMING_MAP strips "diffusion_model."
+    # Both become bare keys like "velocity_model.transformer_blocks.0.attn1.to_q"
+    #
+    # We replicate this: normalize both to bare keys, match, then write back
+    # using the checkpoint's original key format.
 
-    lora_pairs: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+    CKPT_PREFIX = "model.diffusion_model."  # Stripped from checkpoint keys
+    LORA_PREFIX = "diffusion_model."        # Stripped from LoRA keys
+
+    # Build reverse lookup: bare_key → original checkpoint key
+    bare_to_ckpt: dict[str, str] = {}
+    for key in checkpoint_sd:
+        if key.startswith(CKPT_PREFIX):
+            bare = key[len(CKPT_PREFIX):]
+            bare_to_ckpt[bare] = key
+        else:
+            bare_to_ckpt[key] = key  # Key without prefix (e.g., non-diffusion tensors)
+
+    # Build LoRA pairs with bare key mapping
+    lora_pairs: dict[str, tuple[str, torch.Tensor, torch.Tensor]] = {}
     for key in lora_sd:
-        if ".lora_A.weight" in key:
-            prefix = key.replace(".lora_A.weight", "")
-            key_b = f"{prefix}.lora_B.weight"
-            if key_b in lora_sd:
-                lora_pairs[prefix] = (lora_sd[key], lora_sd[key_b])
+        if ".lora_A.weight" not in key:
+            continue
+        lora_prefix = key.replace(".lora_A.weight", "")
+        key_b = f"{lora_prefix}.lora_B.weight"
+        if key_b not in lora_sd:
+            continue
+        # Normalize LoRA prefix to bare key
+        bare = lora_prefix.removeprefix(LORA_PREFIX)
+        bare_weight = f"{bare}.weight"
+        lora_pairs[lora_prefix] = (bare_weight, lora_sd[key], lora_sd[key_b])
 
     logger.info("Found %d LoRA pairs to fuse (strength=%.2f)", len(lora_pairs), strength)
 
-    # Log a sample LoRA key for debugging
     if lora_pairs:
-        sample_key = next(iter(lora_pairs))
-        logger.info("  Sample LoRA prefix: %s", sample_key)
-        logger.info("  Sample checkpoint keys: %s", list(checkpoint_sd.keys())[:3])
+        sample = next(iter(lora_pairs))
+        sample_bare = lora_pairs[sample][0]
+        logger.info("  Sample LoRA prefix: %s → bare: %s", sample, sample_bare)
+        matched = sample_bare in bare_to_ckpt
+        logger.info("  Matched in checkpoint: %s → %s", matched, bare_to_ckpt.get(sample_bare, "N/A"))
 
     # Fuse LoRA deltas into checkpoint weights
     fused_count = 0
     skipped_keys = []
     t0 = time.time()
-    for prefix, (lora_a, lora_b) in lora_pairs.items():
-        # Try matching checkpoint key with known prefix stripping
-        weight_key = None
-        for strip_prefix in KNOWN_PREFIXES:
-            candidate = prefix.removeprefix(strip_prefix) + ".weight"
-            if candidate in checkpoint_sd:
-                weight_key = candidate
-                break
-
-        if weight_key is None:
-            skipped_keys.append(prefix)
+    for lora_prefix, (bare_weight_key, lora_a, lora_b) in lora_pairs.items():
+        # Look up the original checkpoint key from the bare key
+        if bare_weight_key not in bare_to_ckpt:
+            skipped_keys.append(lora_prefix)
             continue
+        weight_key = bare_to_ckpt[bare_weight_key]
 
         weight = checkpoint_sd[weight_key]
         original_dtype = weight.dtype
