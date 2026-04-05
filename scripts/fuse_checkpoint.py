@@ -31,6 +31,7 @@ import sys
 import time
 
 import torch
+from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
 logger = logging.getLogger(__name__)
@@ -48,10 +49,14 @@ def fuse_lora_into_checkpoint(
     logger.info("Loading checkpoint: %s", checkpoint_path)
     t0 = time.time()
     checkpoint_sd = load_file(checkpoint_path, device="cpu")
+    # Preserve metadata (model config, architecture info) — needed by model_config()
+    with safe_open(checkpoint_path, framework="pt", device="cpu") as f:
+        checkpoint_metadata = f.metadata() or {}
     logger.info(
-        "  Loaded %d tensors (%.1f GB) in %.1fs",
+        "  Loaded %d tensors (%.1f GB), %d metadata keys, in %.1fs",
         len(checkpoint_sd),
         sum(t.nbytes for t in checkpoint_sd.values()) / 1e9,
+        len(checkpoint_metadata),
         time.time() - t0,
     )
 
@@ -184,7 +189,7 @@ def fuse_lora_into_checkpoint(
     logger.info("Saving fused checkpoint: %s", output_path)
     t0 = time.time()
     total_size = sum(t.nbytes for t in checkpoint_sd.values()) / 1e9
-    save_file(checkpoint_sd, output_path)
+    save_file(checkpoint_sd, output_path, metadata=checkpoint_metadata)
     logger.info("  Saved %.1f GB in %.1fs", total_size, time.time() - t0)
     logger.info("Done! Pre-fused checkpoint ready at: %s", output_path)
 
