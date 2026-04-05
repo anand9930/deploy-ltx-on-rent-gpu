@@ -25,6 +25,9 @@ RUN git clone --depth 1 https://github.com/Lightricks/LTX-2.git /app/LTX-2 \
         -e /app/LTX-2/packages/ltx-core \
         -e /app/LTX-2/packages/ltx-pipelines
 
+# ---- Patch LTX-2 pipeline for pre-fused checkpoint support -----------------
+COPY patches/ti2vid_two_stages.py /app/LTX-2/packages/ltx-pipelines/src/ltx_pipelines/ti2vid_two_stages.py
+
 # ---- Install project dependencies ------------------------------------------
 COPY pyproject.toml /app/pyproject.toml
 RUN uv pip install --system --no-cache /app
