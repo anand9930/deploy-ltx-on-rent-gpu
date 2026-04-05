@@ -8,10 +8,72 @@ import os
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
 
 import torch
 
 logger = logging.getLogger(__name__)
+
+
+def _load_int8_gemma(gemma_root: str) -> object | None:
+    """Load Gemma-3 12B as INT8 via bitsandbytes. Returns GemmaTextEncoder or None."""
+    try:
+        from transformers import BitsAndBytesConfig, Gemma3ForConditionalGeneration
+
+        from ltx_core.text_encoders.gemma.encoders.base_encoder import (
+            GemmaTextEncoder,
+            module_ops_from_gemma_root,
+        )
+        from ltx_core.text_encoders.gemma.tokenizer import LTXVGemmaTokenizer
+        from ltx_core.utils import find_matching_file
+    except ImportError:
+        logger.info("bitsandbytes or required packages not available for INT8 Gemma")
+        return None
+
+    try:
+        tokenizer_root = str(find_matching_file(gemma_root, "tokenizer.model").parent)
+        model_root = str(find_matching_file(gemma_root, "model*.safetensors").parent)
+
+        logger.info("Loading Gemma-3 12B as INT8 via bitsandbytes ...")
+        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+
+        # Suppress accelerate memory warnings during loading
+        import logging as _logging
+
+        accel_logger = _logging.getLogger("accelerate.utils.modeling")
+        old_level = accel_logger.level
+        accel_logger.setLevel(_logging.WARNING)
+        try:
+            gemma_model = Gemma3ForConditionalGeneration.from_pretrained(
+                model_root,
+                quantization_config=quantization_config,
+                torch_dtype=torch.bfloat16,
+                device_map="auto",
+                local_files_only=True,
+            )
+        finally:
+            accel_logger.setLevel(old_level)
+
+        tokenizer = LTXVGemmaTokenizer(tokenizer_root, 1024)
+
+        # Load processor for prompt enhancement support
+        from transformers import AutoImageProcessor, Gemma3Processor
+
+        processor_root = str(find_matching_file(gemma_root, "preprocessor_config.json").parent)
+        image_processor = AutoImageProcessor.from_pretrained(processor_root, local_files_only=True)
+        processor = Gemma3Processor(image_processor=image_processor, tokenizer=tokenizer.tokenizer)
+
+        text_encoder = GemmaTextEncoder(
+            tokenizer=tokenizer,
+            model=gemma_model,
+            processor=processor,
+            dtype=torch.bfloat16,
+        )
+        logger.info("INT8 Gemma loaded (bitsandbytes) — ~12 GB on GPU, no streaming needed")
+        return text_encoder
+    except Exception:
+        logger.warning("Failed to load INT8 Gemma, falling back to default BF16 streaming", exc_info=True)
+        return None
 
 DEFAULT_NEGATIVE_PROMPT = (
     "worst quality, inconsistent motion, blurry, jittery, distorted, "
@@ -97,6 +159,15 @@ class LTXVideoGenerator:
         self._pipeline = TI2VidTwoStagesPipeline(**pipeline_kwargs)
         self._log_vram("after pipeline init")
 
+        # INT8 Gemma: load quantized text encoder and patch prompt encoder
+        self._gemma_root = gemma_root
+        self._use_int8_gemma = False
+        self._int8_text_encoder = _load_int8_gemma(gemma_root)
+        if self._int8_text_encoder is not None:
+            self._use_int8_gemma = True
+            self._patch_prompt_encoder_for_int8()
+            self._log_vram("after INT8 Gemma load")
+
         # Optional components (guiders, tiling)
         self._MultiModalGuiderParams = None
         try:
@@ -115,6 +186,52 @@ class LTXVideoGenerator:
             pass
 
         logger.info("Pipeline ready.")
+
+    def _patch_prompt_encoder_for_int8(self) -> None:
+        """Replace PromptEncoder's text encoder context with our INT8 model.
+
+        The default PromptEncoder rebuilds Gemma from scratch each generation
+        (either streaming layer-by-layer or loading full BF16).  With INT8
+        Gemma on GPU, we yield the pre-loaded model directly — pure GPU
+        compute, no streaming.  After text encoding completes, we free the
+        model to reclaim ~12 GB for the diffusion stages.
+        """
+        generator = self  # capture for closure
+
+        @contextmanager
+        def _int8_text_encoder_ctx(streaming_prefetch_count=None):  # noqa: ARG001
+            yield generator._int8_text_encoder
+            # Free INT8 Gemma after text encoding to reclaim VRAM for diffusion
+            generator._free_int8_gemma()
+
+        self._pipeline.prompt_encoder._text_encoder_ctx = _int8_text_encoder_ctx
+        logger.info("Prompt encoder patched to use INT8 Gemma (pure GPU, freed after encoding)")
+
+    def _free_int8_gemma(self) -> None:
+        """Delete INT8 Gemma model and reclaim GPU memory."""
+        if self._int8_text_encoder is not None:
+            del self._int8_text_encoder
+            self._int8_text_encoder = None
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+            logger.info("INT8 Gemma freed — VRAM reclaimed for diffusion")
+            self._log_vram("after freeing INT8 Gemma")
+
+    def _ensure_int8_gemma(self) -> None:
+        """Reload INT8 Gemma if it was freed after the previous generation."""
+        if not self._use_int8_gemma:
+            return
+        if self._int8_text_encoder is not None:
+            return  # already loaded (first request)
+        reload_start = time.time()
+        self._int8_text_encoder = _load_int8_gemma(self._gemma_root)
+        if self._int8_text_encoder is not None:
+            self._patch_prompt_encoder_for_int8()
+            logger.info("INT8 Gemma reloaded in %.1fs", time.time() - reload_start)
+        else:
+            logger.warning("INT8 Gemma reload failed, falling back to BF16 streaming")
+            self._use_int8_gemma = False
 
     def _log_vram(self, label: str) -> None:
         if torch.cuda.is_available():
@@ -147,6 +264,9 @@ class LTXVideoGenerator:
             "Job %s: prompt=%r, %dx%d, %d frames, %d steps, seed=%d",
             job_id, prompt[:80], width, height, num_frames, num_inference_steps, seed,
         )
+
+        # Reload INT8 Gemma if freed after previous generation
+        self._ensure_int8_gemma()
 
         try:
             # Guidance params

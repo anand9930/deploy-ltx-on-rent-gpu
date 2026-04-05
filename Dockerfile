@@ -27,7 +27,8 @@ RUN git clone --depth 1 https://github.com/Lightricks/LTX-2.git /app/LTX-2 \
 
 # ---- Install project dependencies ------------------------------------------
 COPY pyproject.toml /app/pyproject.toml
-RUN uv pip install --system --no-cache /app
+RUN uv pip install --system --no-cache /app \
+    && uv pip install --system --no-cache bitsandbytes>=0.45.0 accelerate>=1.0.0
 
 # ---- Copy application code -------------------------------------------------
 COPY src/ /app/src/
