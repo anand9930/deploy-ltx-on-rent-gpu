@@ -10,24 +10,25 @@
 # ============================================================================
 
 # ---- Stage 1: Download models from HuggingFace ------------------------------
+# HF_TOKEN is only needed for license-gated Gemma model.
+# This stage is ephemeral — never pushed, so the token doesn't leak.
 FROM python:3.12-slim AS downloader
+
+ARG HF_TOKEN
 
 RUN pip install --no-cache-dir "huggingface-hub[hf_xet]"
 
-# Download LTX-2.3 models (BF16 checkpoint, distilled LoRA, spatial upscaler)
-RUN --mount=type=secret,id=HF_TOKEN \
-    HF_TOKEN=$(cat /run/secrets/HF_TOKEN) \
-    hf download Lightricks/LTX-2.3 \
+# Download LTX-2.3 models (public, no auth needed)
+RUN hf download Lightricks/LTX-2.3 \
         ltx-2.3-22b-dev.safetensors \
         ltx-2.3-22b-distilled-lora-384.safetensors \
         ltx-2.3-spatial-upscaler-x2-1.1.safetensors \
         --local-dir /models \
     && rm -rf /models/.cache
 
-# Download Gemma-3 12B text encoder (license-gated, ~24 GB)
-RUN --mount=type=secret,id=HF_TOKEN \
-    HF_TOKEN=$(cat /run/secrets/HF_TOKEN) \
-    hf download google/gemma-3-12b-it-qat-q4_0-unquantized \
+# Download Gemma-3 12B text encoder (license-gated, requires HF_TOKEN)
+RUN hf download google/gemma-3-12b-it-qat-q4_0-unquantized \
+        --token "$HF_TOKEN" \
         --local-dir /models/gemma-3-12b-it-qat-q4_0-unquantized \
     && rm -rf /models/gemma-3-12b-it-qat-q4_0-unquantized/.cache
 

@@ -40,6 +40,6 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/ltx-video:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/ltx-video:${{ github.sha }}
-          secrets: |
+          build-args: |
             HF_TOKEN=${{ secrets.HF_TOKEN }}
           no-cache: true
