@@ -1,5 +1,12 @@
 name: Build and Push Docker Image
 
+# NOTE: Full builds with baked-in models (~87 GB image) require a machine with
+# 200+ GB disk. Standard GitHub Actions runners (ubuntu-latest) do not have
+# enough space. Use workflow_dispatch to build manually, or build locally:
+#   DOCKER_BUILDKIT=1 docker build --secret id=HF_TOKEN,env=HF_TOKEN \
+#       -t anand9930/ltx-video:latest .
+#   docker push anand9930/ltx-video:latest
+
 on:
   push:
     branches: [main]
@@ -33,4 +40,6 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/ltx-video:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/ltx-video:${{ github.sha }}
+          secrets: |
+            HF_TOKEN=${{ secrets.HF_TOKEN }}
           no-cache: true

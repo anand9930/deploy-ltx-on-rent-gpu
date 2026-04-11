@@ -6,23 +6,31 @@ from huggingface_hub import hf_hub_download, snapshot_download
 logger = logging.getLogger(__name__)
 
 
+def _require_hf_token() -> str:
+    """Return HF_TOKEN or raise with a helpful message."""
+    token = os.getenv("HF_TOKEN")
+    if not token:
+        raise RuntimeError(
+            "HF_TOKEN env var required for model download. "
+            "Gemma 3 model needs license acceptance at "
+            "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized"
+        )
+    return token
+
+
 def ensure_models_downloaded(model_dir: str) -> None:
     """Download all required LTX-2.3 models to *model_dir* if not already present.
 
-    Uses the official FP8 checkpoint (~29 GB) for lower VRAM usage.
     Downloads are idempotent -- existing files are skipped.
+    When models are baked into the Docker image, this function logs
+    "already cached" for each model and returns without needing HF_TOKEN.
     """
     os.makedirs(model_dir, exist_ok=True)
-    hf_token = os.getenv("HF_TOKEN")
-    if not hf_token:
-        raise RuntimeError(
-            "HF_TOKEN env var required. Gemma 3 model needs license acceptance at "
-            "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized"
-        )
 
     # 1. LTX-2.3 BF16 checkpoint (~46 GB, runtime fp8_cast downcasts on the fly)
     checkpoint_path = os.path.join(model_dir, "ltx-2.3-22b-dev.safetensors")
     if not os.path.exists(checkpoint_path):
+        hf_token = _require_hf_token()
         logger.info("Downloading LTX-2.3 BF16 checkpoint (~46 GB) ...")
         hf_hub_download(
             repo_id="Lightricks/LTX-2.3",
@@ -38,6 +46,7 @@ def ensure_models_downloaded(model_dir: str) -> None:
         model_dir, "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
     )
     if not os.path.exists(upscaler_path):
+        hf_token = _require_hf_token()
         logger.info("Downloading spatial upscaler (~1 GB) ...")
         hf_hub_download(
             repo_id="Lightricks/LTX-2.3",
@@ -53,6 +62,7 @@ def ensure_models_downloaded(model_dir: str) -> None:
         model_dir, "ltx-2.3-22b-distilled-lora-384.safetensors"
     )
     if not os.path.exists(lora_path):
+        hf_token = _require_hf_token()
         logger.info("Downloading distilled LoRA (~7.6 GB) ...")
         hf_hub_download(
             repo_id="Lightricks/LTX-2.3",
@@ -71,6 +81,7 @@ def ensure_models_downloaded(model_dir: str) -> None:
         if os.path.isfile(os.path.join(gemma_dir, f))
     )
     if not gemma_has_weights:
+        hf_token = _require_hf_token()
         logger.info("Downloading Gemma 3 12B text encoder (~26 GB) ...")
         try:
             snapshot_download(
