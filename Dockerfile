@@ -15,8 +15,9 @@ FROM python:3.12-slim AS downloader
 RUN pip install --no-cache-dir "huggingface-hub[hf_xet]"
 
 # Download LTX-2.3 models (BF16 checkpoint, distilled LoRA, spatial upscaler)
-RUN --mount=type=secret,id=HF_TOKEN,env=HF_TOKEN \
-    huggingface-cli download Lightricks/LTX-2.3 \
+RUN --mount=type=secret,id=HF_TOKEN \
+    HF_TOKEN=$(cat /run/secrets/HF_TOKEN) \
+    hf download Lightricks/LTX-2.3 \
         ltx-2.3-22b-dev.safetensors \
         ltx-2.3-22b-distilled-lora-384.safetensors \
         ltx-2.3-spatial-upscaler-x2-1.1.safetensors \
@@ -24,8 +25,9 @@ RUN --mount=type=secret,id=HF_TOKEN,env=HF_TOKEN \
     && rm -rf /models/.cache
 
 # Download Gemma-3 12B text encoder (license-gated, ~24 GB)
-RUN --mount=type=secret,id=HF_TOKEN,env=HF_TOKEN \
-    huggingface-cli download google/gemma-3-12b-it-qat-q4_0-unquantized \
+RUN --mount=type=secret,id=HF_TOKEN \
+    HF_TOKEN=$(cat /run/secrets/HF_TOKEN) \
+    hf download google/gemma-3-12b-it-qat-q4_0-unquantized \
         --local-dir /models/gemma-3-12b-it-qat-q4_0-unquantized \
     && rm -rf /models/gemma-3-12b-it-qat-q4_0-unquantized/.cache
 
