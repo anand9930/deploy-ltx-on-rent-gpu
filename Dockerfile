@@ -1,39 +1,17 @@
 # ============================================================================
 # LTX-2.3 22B — BentoML video generation service (models baked in)
 # ============================================================================
-# Multi-stage build: Stage 1 downloads models from HuggingFace,
-# Stage 2 assembles the final runtime image with models pre-loaded.
+# Single-stage build: downloads models directly into the runtime image
+# to avoid multi-stage COPY disk overhead on constrained CI runners.
 #
-# Build requires Docker BuildKit for secret handling:
-#   DOCKER_BUILDKIT=1 docker build --secret id=HF_TOKEN,env=HF_TOKEN \
+# Build command:
+#   DOCKER_BUILDKIT=1 docker build --build-arg HF_TOKEN=$HF_TOKEN \
 #       -t anand9930/ltx-video:latest .
 # ============================================================================
 
-# ---- Stage 1: Download models from HuggingFace ------------------------------
-# HF_TOKEN is only needed for license-gated Gemma model.
-# This stage is ephemeral — never pushed, so the token doesn't leak.
-FROM python:3.12-slim AS downloader
+FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
 ARG HF_TOKEN
-
-RUN pip install --no-cache-dir "huggingface-hub[hf_xet]"
-
-# Download LTX-2.3 models (public, no auth needed)
-RUN hf download Lightricks/LTX-2.3 \
-        ltx-2.3-22b-dev.safetensors \
-        ltx-2.3-22b-distilled-lora-384.safetensors \
-        ltx-2.3-spatial-upscaler-x2-1.1.safetensors \
-        --local-dir /models \
-    && rm -rf /models/.cache
-
-# Download Gemma-3 12B text encoder (license-gated, requires HF_TOKEN)
-RUN hf download google/gemma-3-12b-it-qat-q4_0-unquantized \
-        --token "$HF_TOKEN" \
-        --local-dir /models/gemma-3-12b-it-qat-q4_0-unquantized \
-    && rm -rf /models/gemma-3-12b-it-qat-q4_0-unquantized/.cache
-
-# ---- Stage 2: Runtime image -------------------------------------------------
-FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -48,14 +26,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && git lfs install \
     && rm -rf /var/lib/apt/lists/*
 
+# ---- Install download tool (lightweight, for model baking) ------------------
+RUN uv pip install --system --no-cache "huggingface-hub[hf_xet]"
+
 # ---- Baked-in models (stable layers — placed before code for cache efficiency)
-# Gemma text encoder (~24 GB)
-COPY --from=downloader /models/gemma-3-12b-it-qat-q4_0-unquantized /models/gemma-3-12b-it-qat-q4_0-unquantized
-# LTX-2.3 main transformer (~46 GB)
-COPY --from=downloader /models/ltx-2.3-22b-dev.safetensors /models/ltx-2.3-22b-dev.safetensors
-# Distilled LoRA + spatial upscaler (~8.6 GB)
-COPY --from=downloader /models/ltx-2.3-22b-distilled-lora-384.safetensors /models/ltx-2.3-22b-distilled-lora-384.safetensors
-COPY --from=downloader /models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors /models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors
+# LTX-2.3 models: BF16 checkpoint (~46 GB), distilled LoRA (~7.6 GB), upscaler (~1 GB)
+RUN hf download Lightricks/LTX-2.3 \
+        ltx-2.3-22b-dev.safetensors \
+        ltx-2.3-22b-distilled-lora-384.safetensors \
+        ltx-2.3-spatial-upscaler-x2-1.1.safetensors \
+        --local-dir /models \
+    && rm -rf /models/.cache
+
+# Gemma-3 12B text encoder (~24 GB, license-gated)
+RUN hf download google/gemma-3-12b-it-qat-q4_0-unquantized \
+        --token "$HF_TOKEN" \
+        --local-dir /models/gemma-3-12b-it-qat-q4_0-unquantized \
+    && rm -rf /models/gemma-3-12b-it-qat-q4_0-unquantized/.cache
 
 # ---- Clone LTX-2 and install its packages ----------------------------------
 RUN git clone --depth 1 https://github.com/Lightricks/LTX-2.git /app/LTX-2 \
