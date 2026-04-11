@@ -10,7 +10,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-_supabase = None
+_supabase: object | None = None
 
 
 def is_configured() -> bool:

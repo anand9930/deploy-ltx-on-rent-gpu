@@ -11,5 +11,16 @@ dependencies = [
     "transformers>=4.52,<5.0",
 ]
 
-[project.optional-dependencies]
-test = ["pytest>=8.0"]
+[tool.mypy]
+
+[[tool.mypy.overrides]]
+module = [
+    "bentoml.*",
+    "huggingface_hub.*",
+    "ltx_core.*",
+    "ltx_pipelines.*",
+    "pydantic.*",
+    "supabase.*",
+    "torch.*",
+]
+ignore_missing_imports = true
