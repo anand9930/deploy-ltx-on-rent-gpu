@@ -3,6 +3,7 @@
 Endpoints:
     generate      — async task (POST /generate/submit, GET /status, /get)
     generate_sync — synchronous, returns MP4 directly
+    ping          — health check for RunPod load balancer (returns 200 when ready)
 
 Built-in: /readyz, /healthz, /metrics, /docs
 """
@@ -32,6 +33,15 @@ class LTXVideoService:
     def __init__(self) -> None:
         model_dir = os.getenv("MODEL_DIR", "/models")
         self.generator = LTXVideoGenerator(model_dir=model_dir)
+
+    @bentoml.api(route="/ping")
+    def ping(self) -> dict:
+        """Health check endpoint for RunPod serverless load-balancing.
+
+        Returns 200 OK once __init__ has completed (generator is loaded).
+        RunPod uses this to determine when a worker is ready to receive traffic.
+        """
+        return {"status": "ok"}
 
     @bentoml.task
     def generate(
